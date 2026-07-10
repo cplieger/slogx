@@ -1,0 +1,19 @@
+// Package slogx is a standard structured-logging setup, extracted from
+// the Go apps that all installed the same log/slog handler by hand.
+//
+// It is a thin, cohesive helper around log/slog — not a logging framework and
+// not a replacement handler:
+//
+//   - Setup installs slog's default logger the standard way: a leveled text
+//     (logfmt) or JSON handler with UTC-normalized timestamps, returning the
+//     *slog.LevelVar so the level can be set after config is read or flipped at
+//     runtime. NewHandler is the same without the SetDefault, for composition.
+//   - ParseLevel maps a LOG_LEVEL string to an slog.Level, adding the long-form
+//     "warning" alias slog lacks and reporting whether the value was recognized.
+//   - UTCTime is the exported ReplaceAttr that renders timestamps in UTC, for
+//     consumers that build their own slog.HandlerOptions.
+//
+// It deliberately does not own log-level environment-variable names, secret
+// redaction, audit-event schemas, or per-app attribute conventions — those stay
+// in the consuming app. It carries no dependencies beyond the standard library.
+package slogx
