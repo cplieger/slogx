@@ -42,7 +42,7 @@ dashboard columns) emits JSON to stdout:
 slogx.Setup(slogx.Options{Format: slogx.JSON, Output: os.Stdout})
 ```
 
-Install a handler *before* config is read (so early warnings still emit), then
+Install a handler _before_ config is read (so early warnings still emit), then
 set the level once it is known — the returned `*slog.LevelVar` also flips the
 level at runtime for a debug toggle:
 
@@ -88,7 +88,7 @@ concept — install the standard slog handler — and stays small on purpose.
 | A custom `slog.Handler` implementation | `slogx` composes the standard-library `Text`/`JSON` handlers. If you need different formatting, write your own handler and use `UTCTime` in its options. |
 | Secret redaction / attribute scrubbing | Keeping secrets out of logs is per-call-site discipline (log `token_set=true`, not the token). A blanket redacting ReplaceAttr gives false confidence; the library will not add one. |
 | Audit-event schemas | A structured audit log (actor, action, outcome) is domain policy that belongs in the app, not in a generic logging helper. |
-| `LOG_LEVEL` (or any) env-var *names* | `ParseLevel` takes a string; the app owns which environment variable it comes from and its default. |
+| `LOG_LEVEL` (or any) env-var _names_ | `ParseLevel` takes a string; the app owns which environment variable it comes from and its default. |
 | Per-app attribute conventions | Base attributes (`slog.With("service", …)`), key naming, and message wording are the app's editorial choices. Call `.With` on the logger `Setup` installs. |
 | A logging facade / leveled wrapper types | `slog` is the interface. `slogx` configures it and gets out of the way; it does not wrap `slog.Logger` in another type. |
 

@@ -20,7 +20,7 @@ introduce leveled-logger types. The whole surface is four ideas:
   the zero value meaning "the standard default".
 - **`ParseLevel`** — the `LOG_LEVEL` superset parser (adds the `warning` alias,
   keeps slog's offset syntax, reports recognized-or-not so the caller warns
-  *after* the handler is installed).
+  _after_ the handler is installed).
 - **`UTCTime`** — the exported ReplaceAttr, so a consumer building its own
   handler options can still get UTC timestamps.
 
