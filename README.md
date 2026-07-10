@@ -77,6 +77,42 @@ h := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{ReplaceAttr: slogx.UTCT
 - `Format` — `Text` (logfmt, default) or `JSON`.
 - `ParseLevel(raw string, def slog.Level) (slog.Level, bool)` — parse a level string (case-insensitive, `warning` alias, slog offset syntax); `ok=false` on a non-empty unparseable value.
 - `UTCTime(groups []string, a slog.Attr) slog.Attr` — the ReplaceAttr that renders timestamps in UTC.
+- `capture` (subpackage `slogx/capture`) — a record-capturing `slog.Handler` for tests; see [Testing](#testing).
+
+## Testing
+
+The `slogx/capture` subpackage records log output so a test can assert on it
+without hand-rolling a buffer handler. For code that logs through
+`slog.Default()`, `capture.Default(t)` swaps in a recorder and restores the
+previous default on cleanup:
+
+```go
+func TestWarnsWhenFull(t *testing.T) {
+	rec := capture.Default(t)
+
+	checkDisk() // logs through slog.Default()
+
+	if rec.Count("disk almost full") != 1 {
+		t.Errorf("want one warning, got %d", rec.Count("disk almost full"))
+	}
+}
+```
+
+For code that takes an injected `*slog.Logger`, `capture.New()` returns a logger
+plus its recorder and never touches the global default, so the test stays
+parallel-safe:
+
+```go
+logger, rec := capture.New()
+c := NewComponent(WithLogger(logger))
+// ... exercise c, then assert on rec.Contains / Count / Messages / Records
+```
+
+`capture` is a separate package so its `testing` import and record buffer never
+reach production consumers of `slogx`; import it only from `_test.go` files.
+Attributes added via `Logger.With`/`WithGroup` are not captured — assert on the
+message, level, and attributes passed directly to the log call, or use
+`rec.Records()` for the raw records.
 
 ## Unsupported by design
 

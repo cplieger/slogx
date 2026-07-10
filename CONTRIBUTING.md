@@ -24,6 +24,15 @@ introduce leveled-logger types. The whole surface is four ideas:
 - **`UTCTime`** — the exported ReplaceAttr, so a consumer building its own
   handler options can still get UTC timestamps.
 
+Plus one test-support subpackage:
+
+- **`slogx/capture`** — a record-capturing `slog.Handler` for tests (`New` to
+  inject a logger, `Default(t)` to swap the global default with auto-restore).
+  It lives in its own package so its `testing` import never reaches production
+  consumers of `slogx`. Keep it minimal — assertion sugar (`Contains`/`Count`/
+  `Messages`) plus `Records()` as the escape hatch; it does not try to capture
+  `With`-attrs.
+
 ## Unsupported by design — a binding contract
 
 The "[Unsupported by design](README.md#unsupported-by-design)" table in
@@ -97,6 +106,9 @@ cases:
   default (non-parallel; saves and restores `slog.Default`).
 - `example_test.go` — runnable `Example` functions that double as docs; keep
   their `// Output:` blocks correct. `bench_test.go` — allocation benchmarks.
+- `capture/capture_test.go` — the `slogx/capture` subpackage (record capture,
+  inject vs global default-swap, snapshot copy, concurrency); `capture/example_test.go`
+  its runnable example.
 
 ## Commits and PRs
 
