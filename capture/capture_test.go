@@ -74,3 +74,16 @@ func TestConcurrentHandleIsRaceFree(t *testing.T) {
 		t.Errorf("Count(concurrent) = %d, want 50", got)
 	}
 }
+
+func TestRecorderNegativeLookups(t *testing.T) {
+	t.Parallel()
+	logger, rec := New()
+	logger.Info("present")
+
+	if rec.Contains("absent") {
+		t.Error("Contains(absent) = true, want false for a substring no record holds")
+	}
+	if got := rec.Count("absent"); got != 0 {
+		t.Errorf("Count(absent) = %d, want 0", got)
+	}
+}
