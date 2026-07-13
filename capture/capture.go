@@ -94,14 +94,7 @@ func (rec *Recorder) Messages() []string {
 
 // Contains reports whether any captured record's Message contains sub.
 func (rec *Recorder) Contains(sub string) bool {
-	rec.mu.Lock()
-	defer rec.mu.Unlock()
-	for i := range rec.records {
-		if strings.Contains(rec.records[i].Message, sub) {
-			return true
-		}
-	}
-	return false
+	return rec.Count(sub) > 0
 }
 
 // Count returns how many captured records have a Message containing sub.
