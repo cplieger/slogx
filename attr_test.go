@@ -44,3 +44,14 @@ func TestUTCTimeLeavesGroupedTimeKey(t *testing.T) {
 		t.Errorf("grouped time attr offset = %d, want %d (untouched)", offset, 5*60*60)
 	}
 }
+
+func TestUTCTimeLeavesTopLevelNonTimeValue(t *testing.T) {
+	t.Parallel()
+	// A top-level attr keyed "time" whose value is not a time (Kind != KindTime)
+	// must be returned untouched: the Kind guard prevents calling Value.Time()
+	// on a non-time value, which would panic.
+	got := UTCTime(nil, slog.String(slog.TimeKey, "not-a-timestamp"))
+	if got.Value.Kind() != slog.KindString || got.Value.String() != "not-a-timestamp" {
+		t.Errorf("top-level non-time %q attr altered: got kind=%v value=%q", slog.TimeKey, got.Value.Kind(), got.Value.String())
+	}
+}

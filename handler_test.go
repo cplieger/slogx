@@ -2,7 +2,9 @@ package slogx
 
 import (
 	"bytes"
+	"io"
 	"log/slog"
+	"os"
 	"strings"
 	"testing"
 )
@@ -93,5 +95,31 @@ func TestSetupInstallsDefault(t *testing.T) {
 	slog.Info("through-default", "k", "v")
 	if !strings.Contains(buf.String(), "msg=through-default") {
 		t.Errorf("Setup did not install the default logger: %q", buf.String())
+	}
+}
+
+func TestNewHandlerNilOutputDefaultsToStderr(t *testing.T) {
+	// Not parallel: temporarily swaps the global os.Stderr.
+	old := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stderr = w
+	t.Cleanup(func() { os.Stderr = old })
+
+	handler, _ := NewHandler(Options{}) // nil Output must default to os.Stderr
+	slog.New(handler).Info("to-stderr")
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("close pipe writer: %v", err)
+	}
+	os.Stderr = old
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read pipe: %v", err)
+	}
+	if !strings.Contains(string(out), "msg=to-stderr") {
+		t.Errorf("nil Output did not default to os.Stderr; captured %q", out)
 	}
 }

@@ -87,3 +87,14 @@ func TestRecorderNegativeLookups(t *testing.T) {
 		t.Errorf("Count(absent) = %d, want 0", got)
 	}
 }
+
+func TestCaptureRecordsBelowDefaultLevel(t *testing.T) {
+	t.Parallel()
+	// Recorder.Enabled reports true for every level, so a Debug record (below
+	// slog's default Info threshold) is still captured.
+	logger, rec := New()
+	logger.Debug("debug-detail")
+	if !rec.Contains("debug-detail") {
+		t.Error("Debug record not captured; Recorder must record at any level")
+	}
+}
