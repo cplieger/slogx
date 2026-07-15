@@ -76,6 +76,7 @@ h := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{ReplaceAttr: slogx.UTCT
 - `Options{Output, Format, Level, AddSource}` — zero value is a text handler at Info on stderr.
 - `Format` — `Text` (logfmt, default) or `JSON`.
 - `ParseLevel(raw string, def slog.Level) (slog.Level, bool)` — parse a level string (case-insensitive, `warning` alias, slog offset syntax); `ok=false` on a non-empty unparseable value.
+- `ParseFormat(raw string, def Format) (Format, bool)` — parse a format string (`text`/`json`, case-insensitive, trimmed); same contract as `ParseLevel`: empty returns the default with `ok=true`, a non-empty unrecognized value returns the default with `ok=false` so the caller can warn.
 - `UTCTime(groups []string, a slog.Attr) slog.Attr` — the ReplaceAttr that renders timestamps in UTC.
 - `capture` (subpackage `slogx/capture`) — a record-capturing `slog.Handler` for tests; see [Testing](#testing).
 
@@ -105,8 +106,13 @@ parallel-safe:
 ```go
 logger, rec := capture.New()
 c := NewComponent(WithLogger(logger))
-// ... exercise c, then assert on rec.Contains / Count / Messages / Records
+// ... exercise c, then assert on rec.Contains / Count / CountExact / Messages / Records
 ```
+
+`Count` matches by substring; `CountExact` matches the whole message. Reach for
+`CountExact` when a message is pinned by an external contract (a log-based
+alert rule matching the exact `msg`), where a substring count would false-pass
+on a superstring message.
 
 `capture` is a separate package so its `testing` import and record buffer never
 reach production consumers of `slogx`; import it only from `_test.go` files.

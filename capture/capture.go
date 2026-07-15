@@ -109,3 +109,21 @@ func (rec *Recorder) Count(sub string) int {
 	}
 	return n
 }
+
+// CountExact returns how many captured records have a Message exactly equal to
+// msg. Use it over Count when the message is pinned by an external contract
+// (for example a Loki alert rule matching the exact msg value): the substring
+// Count would also match a superstring message ("cycle completed with errors"
+// matches Count("cycle complete")), silently passing a test the contract
+// should fail.
+func (rec *Recorder) CountExact(msg string) int {
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	n := 0
+	for i := range rec.records {
+		if rec.records[i].Message == msg {
+			n++
+		}
+	}
+	return n
+}
