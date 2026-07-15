@@ -98,3 +98,30 @@ func TestCaptureRecordsBelowDefaultLevel(t *testing.T) {
 		t.Error("Debug record not captured; Recorder must record at any level")
 	}
 }
+
+func TestCountExact(t *testing.T) {
+	t.Parallel()
+	logger, rec := New()
+	logger.Info("cycle complete")
+	logger.Warn("cycle complete")
+	logger.Error("cycle completed with errors")
+	logger.Info("prefix cycle complete")
+
+	// The exact-match count sees only the two exact messages; the substring
+	// Count sees all four — the false-pass window CountExact exists to close.
+	if got := rec.CountExact("cycle complete"); got != 2 {
+		t.Errorf("CountExact(cycle complete) = %d, want 2", got)
+	}
+	if got := rec.Count("cycle complete"); got != 4 {
+		t.Errorf("Count(cycle complete) = %d, want 4 (substring semantics)", got)
+	}
+	if got := rec.CountExact("cycle"); got != 0 {
+		t.Errorf("CountExact(cycle) = %d, want 0 for a partial message", got)
+	}
+	if got := rec.CountExact("absent"); got != 0 {
+		t.Errorf("CountExact(absent) = %d, want 0", got)
+	}
+	if got := rec.CountExact(""); got != 0 {
+		t.Errorf("CountExact(\"\") = %d, want 0 when no record has an empty message", got)
+	}
+}
