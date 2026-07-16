@@ -82,6 +82,21 @@ func TestNewHandlerAddSource(t *testing.T) {
 	}
 }
 
+func TestNewHandlerInvalidFormatPanics(t *testing.T) {
+	t.Parallel()
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("NewHandler with an out-of-range Format did not panic")
+		}
+		msg, ok := r.(string)
+		if !ok || !strings.Contains(msg, "invalid Format value 99") {
+			t.Errorf("panic value = %v, want a string naming the invalid Format value", r)
+		}
+	}()
+	NewHandler(Options{Format: Format(99)})
+}
+
 func TestSetupInstallsDefault(t *testing.T) {
 	// Not parallel: mutates the global slog default. Restore it afterward.
 	old := slog.Default()
