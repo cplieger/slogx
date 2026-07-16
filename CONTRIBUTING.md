@@ -29,9 +29,11 @@ Plus one test-support subpackage:
 - **`slogx/capture`** — a record-capturing `slog.Handler` for tests (`New` to
   inject a logger, `Default(t)` to swap the global default with auto-restore).
   It lives in its own package so its `testing` import never reaches production
-  consumers of `slogx`. Keep it minimal — assertion sugar (`Contains`/`Count`/
-  `Messages`) plus `Records()` as the escape hatch; it does not try to capture
-  `With`-attrs.
+  consumers of `slogx`. It honors the full `slog.Handler` derivation contract:
+  `WithAttrs`/`WithGroup` return handles over the shared record buffer, so
+  captured records carry inherited attrs/groups with real-handler nesting.
+  Keep it minimal — assertion sugar (`Contains`/`Count`/`CountExact`/
+  `Messages`) plus `Records()` as the escape hatch.
 
 ## Unsupported by design — a binding contract
 
@@ -99,16 +101,21 @@ cases:
 
 - `level_test.go` — the `ParseLevel` table (aliases, offsets, defaults,
   rejection); `level_fuzz_test.go` — `FuzzParseLevel`.
+- `format_test.go` — the `ParseFormat` table (same trim/lower/empty/ok contract
+  as `ParseLevel`); `format_fuzz_test.go` — `FuzzParseFormat`.
 - `attr_test.go` — `UTCTime` (rewrites a top-level time to UTC, leaves non-time
   and grouped attrs alone).
 - `handler_test.go` — `NewHandler` text/JSON output, UTC normalization, level
-  filtering via the live `LevelVar`, `AddSource`, and `Setup` installing the
-  default (non-parallel; saves and restores `slog.Default`).
+  filtering via the live `LevelVar`, `AddSource`, the invalid-`Format` panic,
+  and `Setup` installing the default (non-parallel; saves and restores
+  `slog.Default`).
 - `example_test.go` — runnable `Example` functions that double as docs; keep
   their `// Output:` blocks correct. `bench_test.go` — allocation benchmarks.
 - `capture/capture_test.go` — the `slogx/capture` subpackage (record capture,
-  inject vs global default-swap, snapshot copy, concurrency); `capture/example_test.go`
-  its runnable example.
+  inject vs global default-swap, snapshot copy, concurrency, and the
+  `WithAttrs`/`WithGroup` derivation: inheritance nesting, empty-group elision,
+  receiver-return contract edges, sibling non-aliasing);
+  `capture/example_test.go` its runnable example.
 
 ## Commits and PRs
 
