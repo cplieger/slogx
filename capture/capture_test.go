@@ -40,10 +40,161 @@ func TestRecordsReturnsSnapshotCopy(t *testing.T) {
 func TestWithAttrsAndGroupStillCapture(t *testing.T) {
 	t.Parallel()
 	logger, rec := New()
-	// WithAttrs/WithGroup return the Recorder unchanged; the record still lands.
+	// WithAttrs/WithGroup derive handles over the same record buffer; the
+	// record lands on the root Recorder.
 	logger.With("base", 1).WithGroup("grp").Info("nested")
 	if !rec.Contains("nested") {
 		t.Error("WithAttrs/WithGroup dropped the record")
+	}
+}
+
+// recordAttrs flattens a record's top-level attrs for structural assertions.
+func recordAttrs(t *testing.T, r slog.Record) []slog.Attr {
+	t.Helper()
+	attrs := make([]slog.Attr, 0, r.NumAttrs())
+	r.Attrs(func(a slog.Attr) bool {
+		attrs = append(attrs, a)
+		return true
+	})
+	return attrs
+}
+
+func TestWithAttrsCapturedAtTopLevel(t *testing.T) {
+	t.Parallel()
+	logger, rec := New()
+	logger.With("base", 1).Info("m", "direct", "v")
+
+	records := rec.Records()
+	if len(records) != 1 {
+		t.Fatalf("Len = %d, want 1", len(records))
+	}
+	attrs := recordAttrs(t, records[0])
+	if len(attrs) != 2 {
+		t.Fatalf("attrs = %v, want [base=1 direct=v]", attrs)
+	}
+	if attrs[0].Key != "base" || attrs[0].Value.String() != "1" {
+		t.Errorf("inherited attr = %v, want base=1 first (inherited attrs precede call-site attrs)", attrs[0])
+	}
+	if attrs[1].Key != "direct" || attrs[1].Value.String() != "v" {
+		t.Errorf("call-site attr = %v, want direct=v", attrs[1])
+	}
+}
+
+func TestWithGroupNestingMatchesRealHandler(t *testing.T) {
+	t.Parallel()
+	// logger.With(a).WithGroup(g).With(b) logging (m, c) must capture
+	// a=1 at the top level and b=2, c=3 inside group g — the same shape a
+	// stdlib handler renders as a=1 g.b=2 g.c=3.
+	logger, rec := New()
+	logger.With("a", 1).WithGroup("g").With("b", 2).Info("m", "c", 3)
+
+	records := rec.Records()
+	if len(records) != 1 {
+		t.Fatalf("Len = %d, want 1", len(records))
+	}
+	attrs := recordAttrs(t, records[0])
+	if len(attrs) != 2 {
+		t.Fatalf("top-level attrs = %v, want [a g]", attrs)
+	}
+	if attrs[0].Key != "a" || attrs[0].Value.String() != "1" {
+		t.Errorf("attrs[0] = %v, want a=1", attrs[0])
+	}
+	if attrs[1].Key != "g" || attrs[1].Value.Kind() != slog.KindGroup {
+		t.Fatalf("attrs[1] = %v, want group g", attrs[1])
+	}
+	grp := attrs[1].Value.Group()
+	if len(grp) != 2 || grp[0].Key != "b" || grp[0].Value.String() != "2" || grp[1].Key != "c" || grp[1].Value.String() != "3" {
+		t.Errorf("group g = %v, want [b=2 c=3]", grp)
+	}
+}
+
+func TestNestedGroupsCaptured(t *testing.T) {
+	t.Parallel()
+	logger, rec := New()
+	logger.WithGroup("g").WithGroup("h").Info("m", "k", 1)
+
+	attrs := recordAttrs(t, rec.Records()[0])
+	if len(attrs) != 1 || attrs[0].Key != "g" || attrs[0].Value.Kind() != slog.KindGroup {
+		t.Fatalf("top-level attrs = %v, want a single group g", attrs)
+	}
+	inner := attrs[0].Value.Group()
+	if len(inner) != 1 || inner[0].Key != "h" || inner[0].Value.Kind() != slog.KindGroup {
+		t.Fatalf("g = %v, want a single nested group h", inner)
+	}
+	leaf := inner[0].Value.Group()
+	if len(leaf) != 1 || leaf[0].Key != "k" || leaf[0].Value.String() != "1" {
+		t.Errorf("g.h = %v, want [k=1]", leaf)
+	}
+}
+
+func TestEmptyGroupElided(t *testing.T) {
+	t.Parallel()
+	// A group with no attrs inside it is elided, matching stdlib handler output.
+	logger, rec := New()
+	logger.WithGroup("g").Info("bare")
+
+	r := rec.Records()[0]
+	if n := r.NumAttrs(); n != 0 {
+		t.Errorf("NumAttrs = %d, want 0 (empty group must be elided)", n)
+	}
+}
+
+func TestDerivedHandleContractEdges(t *testing.T) {
+	t.Parallel()
+	_, rec := New()
+	// Contract: an empty name / empty attrs slice returns the receiver.
+	if got := rec.WithGroup(""); got != slog.Handler(rec) {
+		t.Error("Recorder.WithGroup(\"\") did not return the receiver")
+	}
+	if got := rec.WithAttrs(nil); got != slog.Handler(rec) {
+		t.Error("Recorder.WithAttrs(nil) did not return the receiver")
+	}
+	d := rec.WithAttrs([]slog.Attr{slog.Int("a", 1)})
+	if got := d.WithGroup(""); got != d {
+		t.Error("derived.WithGroup(\"\") did not return the receiver")
+	}
+	if got := d.WithAttrs(nil); got != d {
+		t.Error("derived.WithAttrs(nil) did not return the receiver")
+	}
+}
+
+func TestDerivedSiblingsDoNotAlias(t *testing.T) {
+	t.Parallel()
+	// Two handles derived from the same parent must not leak steps into each
+	// other's prefix (a fresh-backing-array regression guard).
+	logger, rec := New()
+	parent := logger.With("p", 0)
+	parent.With("a", 1).Info("via-a")
+	parent.With("b", 2).Info("via-b")
+
+	records := rec.Records()
+	if len(records) != 2 {
+		t.Fatalf("Len = %d, want 2", len(records))
+	}
+	attrsA := recordAttrs(t, records[0])
+	if len(attrsA) != 2 || attrsA[0].Key != "p" || attrsA[1].Key != "a" {
+		t.Errorf("first record attrs = %v, want [p a]", attrsA)
+	}
+	attrsB := recordAttrs(t, records[1])
+	if len(attrsB) != 2 || attrsB[0].Key != "p" || attrsB[1].Key != "b" {
+		t.Errorf("second record attrs = %v, want [p b] (sibling must not inherit a)", attrsB)
+	}
+}
+
+func TestConcurrentDerivedHandlesAreRaceFree(t *testing.T) {
+	t.Parallel()
+	logger, rec := New()
+	var wg sync.WaitGroup
+	for i := range 25 {
+		wg.Go(func() { logger.With("worker", i).Info("derived-concurrent") })
+		wg.Go(func() { logger.Info("root-concurrent") })
+	}
+	wg.Wait()
+	if got := rec.Count("derived-concurrent"); got != 25 {
+		t.Errorf("Count(derived-concurrent) = %d, want 25", got)
+	}
+	if got := rec.Count("root-concurrent"); got != 25 {
+		t.Errorf("Count(root-concurrent) = %d, want 25", got)
 	}
 }
 

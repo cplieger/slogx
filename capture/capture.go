@@ -5,9 +5,11 @@
 // record buffer are test-support machinery that should never reach slogx's
 // production consumers. Import it only from _test.go files.
 //
-// Attributes added through Logger.With / WithGroup are not captured; assert on
-// the level, message, and attributes passed directly to the log call. Use
-// Records for anything the convenience methods do not cover.
+// Attributes and groups added through Logger.With / Logger.WithGroup are
+// captured with the same nesting a real handler would emit: derived handles
+// share the recorder's buffer and materialize their inherited context into
+// each stored record, so Records reflects what production output would
+// contain. Use Records for anything the convenience methods do not cover.
 package capture
 
 import (
@@ -20,7 +22,11 @@ import (
 )
 
 // Recorder is a slog.Handler that captures every record it receives, at any
-// level, so a test can assert on what was logged. It is safe for concurrent use.
+// level, so a test can assert on what was logged. Handler derivation is
+// honored per the slog.Handler contract: handles returned by WithAttrs and
+// WithGroup record through the same Recorder, with their inherited attributes
+// and groups materialized into each stored record. It is safe for concurrent
+// use.
 type Recorder struct {
 	records []slog.Record
 	mu      sync.Mutex
@@ -54,17 +60,112 @@ func (rec *Recorder) Enabled(context.Context, slog.Level) bool { return true }
 //
 //nolint:gocritic // Handle's signature is fixed by the slog.Handler interface; r cannot be a pointer.
 func (rec *Recorder) Handle(_ context.Context, r slog.Record) error {
-	rec.mu.Lock()
-	defer rec.mu.Unlock()
-	rec.records = append(rec.records, r.Clone())
+	clone := r.Clone()
+	rec.append(&clone)
 	return nil
 }
 
-// WithAttrs returns the Recorder unchanged; base attributes are not captured.
-func (rec *Recorder) WithAttrs([]slog.Attr) slog.Handler { return rec }
+// append stores one materialized record. All handles derived from this
+// Recorder funnel through it, so the buffer stays ordered and race-free.
+func (rec *Recorder) append(r *slog.Record) {
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	rec.records = append(rec.records, *r)
+}
 
-// WithGroup returns the Recorder unchanged; groups are not captured.
-func (rec *Recorder) WithGroup(string) slog.Handler { return rec }
+// WithAttrs returns a handler that records through this Recorder with attrs
+// prepended to every captured record, exactly as a real handler would include
+// them. An empty attrs slice returns the receiver.
+func (rec *Recorder) WithAttrs(attrs []slog.Attr) slog.Handler {
+	if len(attrs) == 0 {
+		return rec
+	}
+	return &derived{rec: rec, ops: []op{{attrs: attrs}}}
+}
+
+// WithGroup returns a handler that records through this Recorder with
+// subsequent attributes nested under name, exactly as a real handler would
+// qualify them. An empty name returns the receiver, per the slog.Handler
+// contract.
+func (rec *Recorder) WithGroup(name string) slog.Handler {
+	if name == "" {
+		return rec
+	}
+	return &derived{rec: rec, ops: []op{{group: name}}}
+}
+
+// op is one derivation step: a WithAttrs attribute set (attrs non-empty) or a
+// WithGroup name (group non-empty). Exactly one field is set.
+type op struct {
+	group string
+	attrs []slog.Attr
+}
+
+// derived is the handle WithAttrs/WithGroup return: an immutable derivation
+// prefix over the root Recorder's shared record buffer.
+type derived struct {
+	rec *Recorder
+	ops []op
+}
+
+// Enabled reports true for every level so nothing is filtered before capture.
+func (d *derived) Enabled(context.Context, slog.Level) bool { return true }
+
+// Handle materializes the derivation prefix into the record — inherited
+// attributes at their nesting depth, later attributes and the record's own
+// under every group opened before them — and stores the result, so the
+// captured record matches what a real handler would emit.
+//
+//nolint:gocritic // Handle's signature is fixed by the slog.Handler interface; r cannot be a pointer.
+func (d *derived) Handle(_ context.Context, r slog.Record) error {
+	attrs := make([]slog.Attr, 0, r.NumAttrs())
+	r.Attrs(func(a slog.Attr) bool {
+		attrs = append(attrs, a)
+		return true
+	})
+	for _, o := range slices.Backward(d.ops) {
+		switch {
+		case o.group != "":
+			if len(attrs) == 0 {
+				continue // a group holding no attrs is elided, like the stdlib handlers do
+			}
+			attrs = []slog.Attr{{Key: o.group, Value: slog.GroupValue(attrs...)}}
+		default:
+			attrs = slices.Concat(o.attrs, attrs)
+		}
+	}
+	nr := slog.NewRecord(r.Time, r.Level, r.Message, r.PC)
+	nr.AddAttrs(attrs...)
+	d.rec.append(&nr)
+	return nil
+}
+
+// WithAttrs returns a new handle extending the derivation with attrs. An empty
+// attrs slice returns the receiver.
+func (d *derived) WithAttrs(attrs []slog.Attr) slog.Handler {
+	if len(attrs) == 0 {
+		return d
+	}
+	return &derived{rec: d.rec, ops: appendOp(d.ops, op{attrs: attrs})}
+}
+
+// WithGroup returns a new handle extending the derivation with a group. An
+// empty name returns the receiver, per the slog.Handler contract.
+func (d *derived) WithGroup(name string) slog.Handler {
+	if name == "" {
+		return d
+	}
+	return &derived{rec: d.rec, ops: appendOp(d.ops, op{group: name})}
+}
+
+// appendOp extends a derivation prefix into fresh backing storage, so sibling
+// handles derived from the same parent never alias each other's steps.
+func appendOp(ops []op, next op) []op {
+	out := make([]op, len(ops)+1)
+	copy(out, ops)
+	out[len(ops)] = next
+	return out
+}
 
 // Records returns a snapshot copy of the captured records, in order. Mutating
 // or extending the result does not affect later captures.

@@ -10,8 +10,13 @@
 //     runtime. NewHandler is the same without the SetDefault, for composition.
 //   - ParseLevel maps a LOG_LEVEL string to an slog.Level, adding the long-form
 //     "warning" alias slog lacks and reporting whether the value was recognized.
+//   - ParseFormat is its format sibling, mapping a log-format string ("text" or
+//     "json") to a Format under the same trim/lower/empty/ok contract.
 //   - UTCTime is the exported ReplaceAttr that renders timestamps in UTC, for
 //     consumers that build their own slog.HandlerOptions.
+//
+// The capture subpackage is the matching test-support recorder: a slog.Handler
+// that records emitted log records so tests can assert on them.
 //
 // It deliberately does not own log-level environment-variable names, secret
 // redaction, audit-event schemas, or per-app attribute conventions — those stay
