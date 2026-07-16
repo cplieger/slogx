@@ -4,6 +4,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strconv"
 )
 
 // Format selects the slog handler's output encoding.
@@ -24,7 +25,9 @@ type Options struct {
 	// Output is the destination writer; nil means os.Stderr. Apps whose JSON log
 	// events are the product typically set os.Stdout.
 	Output io.Writer
-	// Format is Text (default) or JSON.
+	// Format is Text (default) or JSON. Any other value is a programmer error
+	// and makes NewHandler and Setup panic; parse untrusted format strings with
+	// ParseFormat, which only produces the two constants.
 	Format Format
 	// Level is the initial level; the zero value is slog.LevelInfo. It is held in
 	// the *slog.LevelVar that NewHandler and Setup return, so it can be changed
@@ -40,7 +43,7 @@ type Options struct {
 // the level after install: install a handler before config is read (so early
 // warnings emit at the default level), then Set the parsed level; or flip it at
 // runtime for a debug toggle. Setup wraps this and installs the result as the
-// default logger.
+// default logger. It panics if opts.Format is neither Text nor JSON.
 func NewHandler(opts Options) (slog.Handler, *slog.LevelVar) {
 	out := opts.Output
 	if out == nil {
@@ -53,10 +56,14 @@ func NewHandler(opts Options) (slog.Handler, *slog.LevelVar) {
 		Level:       levelVar,
 		ReplaceAttr: UTCTime,
 	}
-	if opts.Format == JSON {
+	switch opts.Format {
+	case Text:
+		return slog.NewTextHandler(out, handlerOpts), levelVar
+	case JSON:
 		return slog.NewJSONHandler(out, handlerOpts), levelVar
+	default:
+		panic("slogx: invalid Format value " + strconv.Itoa(int(opts.Format)))
 	}
-	return slog.NewTextHandler(out, handlerOpts), levelVar
 }
 
 // Setup builds a handler per opts and installs it as slog's default logger,

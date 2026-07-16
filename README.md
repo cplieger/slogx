@@ -74,7 +74,7 @@ h := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{ReplaceAttr: slogx.UTCT
 - `Setup(Options) *slog.LevelVar` — build a handler and install it as `slog`'s default; returns the LevelVar backing its level.
 - `NewHandler(Options) (slog.Handler, *slog.LevelVar)` — the same without the `SetDefault`, for composition.
 - `Options{Output, Format, Level, AddSource}` — zero value is a text handler at Info on stderr.
-- `Format` — `Text` (logfmt, default) or `JSON`.
+- `Format` — `Text` (logfmt, default) or `JSON`; any other value is a programmer error and makes `NewHandler`/`Setup` panic (`ParseFormat` only ever produces the two constants).
 - `ParseLevel(raw string, def slog.Level) (slog.Level, bool)` — parse a level string (case-insensitive, `warning` alias, slog offset syntax); `ok=false` on a non-empty unparseable value.
 - `ParseFormat(raw string, def Format) (Format, bool)` — parse a format string (`text`/`json`, case-insensitive, trimmed); same contract as `ParseLevel`: empty returns the default with `ok=true`, a non-empty unrecognized value returns the default with `ok=false` so the caller can warn.
 - `UTCTime(groups []string, a slog.Attr) slog.Attr` — the ReplaceAttr that renders timestamps in UTC.
@@ -116,9 +116,11 @@ on a superstring message.
 
 `capture` is a separate package so its `testing` import and record buffer never
 reach production consumers of `slogx`; import it only from `_test.go` files.
-Attributes added via `Logger.With`/`WithGroup` are not captured — assert on the
-message, level, and attributes passed directly to the log call, or use
-`rec.Records()` for the raw records.
+Attributes and groups added via `Logger.With`/`Logger.WithGroup` are captured
+with the same nesting a real handler would emit — a record logged through
+`logger.With("app", "x").WithGroup("req")` carries `app` at the top level and
+later attributes inside the `req` group, so `rec.Records()` reflects what
+production output would contain.
 
 ## Unsupported by design
 
