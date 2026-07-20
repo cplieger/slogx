@@ -31,7 +31,8 @@ install, then warn on a bad value (so the warning goes through the new handler):
 lvl, ok := slogx.ParseLevel(os.Getenv("LOG_LEVEL"), slog.LevelInfo)
 slogx.Setup(slogx.Options{Level: lvl})
 if !ok {
-	slog.Warn("invalid LOG_LEVEL, using default", "value", os.Getenv("LOG_LEVEL"), "default", "info")
+	// Field-name-only: a misconfigured env expansion could place a secret here.
+	slog.Warn("invalid LOG_LEVEL, using default", "var", "LOG_LEVEL", "default", "info")
 }
 ```
 

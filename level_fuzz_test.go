@@ -13,6 +13,7 @@ func FuzzParseLevel(f *testing.F) {
 	for _, seed := range []string{
 		"", "  ", "debug", "info", "warn", "warning", "WARNING",
 		"error", "warn+1", "debug-2", "banana", "warn ", "12", "info+99",
+		"warning+1", "warning-2",
 	} {
 		f.Add(seed)
 	}
