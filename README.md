@@ -121,7 +121,10 @@ Attributes and groups added via `Logger.With`/`Logger.WithGroup` are captured
 with the same nesting a real handler would emit — a record logged through
 `logger.With("app", "x").WithGroup("req")` carries `app` at the top level and
 later attributes inside the `req` group, so `rec.Records()` reflects what
-production output would contain.
+production output would contain. Captured records are render-faithful:
+attribute values are stored resolved (`slog.LogValuer`), and degenerate attrs
+follow the `slog.Handler` output rules — a zero `slog.Attr` and an empty group
+are dropped, and an empty-keyed group's attrs are inlined into their parent.
 
 ## Unsupported by design
 

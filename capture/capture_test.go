@@ -432,3 +432,170 @@ func TestDerivedHandlePreservesRecordFields(t *testing.T) {
 		t.Errorf("derived record NumAttrs = %d, want 2 (base + call-site)", n)
 	}
 }
+
+func TestEmptyGroupRecordAttrElidedWithEnclosingGroup(t *testing.T) {
+	t.Parallel()
+	// stdlib parity: an empty group renders nothing, so a derivation group
+	// whose only content was that attr is elided too — a stdlib handler emits
+	// just msg=m. The second case only becomes empty after inner normalization
+	// (its sole child is a zero Attr); it used to defeat the enclosing-group
+	// elision.
+	for _, tc := range []struct {
+		name string
+		attr slog.Attr
+	}{
+		{name: "empty group", attr: slog.Group("empty")},
+		{name: "group holding only a zero attr", attr: slog.Group("empty", slog.Attr{})},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			logger, rec := New()
+			logger.WithGroup("g").LogAttrs(context.Background(), slog.LevelInfo, "m", tc.attr)
+
+			records := rec.Records()
+			if len(records) != 1 {
+				t.Fatalf("Len = %d, want 1", len(records))
+			}
+			if n := records[0].NumAttrs(); n != 0 {
+				t.Errorf("NumAttrs = %d, want 0 (a degenerate record attr must not defeat enclosing-group elision)", n)
+			}
+		})
+	}
+}
+
+func TestZeroAttrDropped(t *testing.T) {
+	t.Parallel()
+	// "If an Attr's key and value are both the zero value, ignore the Attr" —
+	// a stdlib handler renders nothing for slog.Attr{}; capture must match.
+	logger, rec := New()
+	logger.LogAttrs(context.Background(), slog.LevelInfo, "m", slog.Attr{}, slog.String("k", "v"))
+
+	attrs := recordAttrs(t, rec.Records()[0])
+	if len(attrs) != 1 || attrs[0].Key != "k" || attrs[0].Value.String() != "v" {
+		t.Errorf("attrs = %v, want [k=v] (the zero Attr must be dropped)", attrs)
+	}
+}
+
+func TestWithEmptyGroupDerivationElided(t *testing.T) {
+	t.Parallel()
+	// Logger.With hands attrs to WithAttrs unfiltered; stdlib handlers
+	// preformat them there, and an empty group adds nothing. The whole
+	// derivation op is elided: attrs that normalize to empty return the
+	// receiver, exactly like the empty-slice guard.
+	logger, rec := New()
+	logger.With(slog.Group("empty")).Info("m", "k", "v")
+
+	attrs := recordAttrs(t, rec.Records()[0])
+	if len(attrs) != 1 || attrs[0].Key != "k" {
+		t.Errorf("attrs = %v, want [k=v] (an empty-group With op must be elided)", attrs)
+	}
+
+	degenerate := []slog.Attr{slog.Group("empty"), {}}
+	if got := rec.WithAttrs(degenerate); got != slog.Handler(rec) {
+		t.Error("Recorder.WithAttrs(all-degenerate attrs) did not return the receiver")
+	}
+	d := rec.WithAttrs([]slog.Attr{slog.Int("a", 1)})
+	if got := d.WithAttrs(degenerate); got != d {
+		t.Error("derived.WithAttrs(all-degenerate attrs) did not return the receiver")
+	}
+}
+
+func TestEmptyKeyedGroupInlined(t *testing.T) {
+	t.Parallel()
+	// "If a group's key is empty, inline the group's Attrs" — stdlib handlers
+	// render slog.Group("", a, b) exactly as if a and b were passed directly,
+	// at the top level and nested inside a named group alike.
+	logger, rec := New()
+	logger.Info("top", slog.Group("", slog.String("a", "1"), slog.Int("b", 2)))
+	logger.Info("nested", slog.Group("outer", slog.Group("", slog.String("x", "1"))))
+
+	records := rec.Records()
+	top := recordAttrs(t, records[0])
+	if len(top) != 2 || top[0].Key != "a" || top[0].Value.String() != "1" ||
+		top[1].Key != "b" || top[1].Value.String() != "2" {
+		t.Errorf("top-level attrs = %v, want inlined [a=1 b=2]", top)
+	}
+	nested := recordAttrs(t, records[1])
+	if len(nested) != 1 || nested[0].Key != "outer" || nested[0].Value.Kind() != slog.KindGroup {
+		t.Fatalf("nested attrs = %v, want a single group outer", nested)
+	}
+	grp := nested[0].Value.Group()
+	if len(grp) != 1 || grp[0].Key != "x" || grp[0].Value.String() != "1" {
+		t.Errorf("group outer = %v, want inlined [x=1]", grp)
+	}
+}
+
+// stringValuer is a slog.LogValuer resolving to a fixed string, for asserting
+// that captured values are stored resolved rather than as the raw valuer.
+type stringValuer struct{}
+
+func (stringValuer) LogValue() slog.Value { return slog.StringValue("resolved") }
+
+// emptyGroupValuer is a slog.LogValuer resolving to an empty group, for
+// asserting that resolution happens before the group output rules apply.
+type emptyGroupValuer struct{}
+
+func (emptyGroupValuer) LogValue() slog.Value { return slog.GroupValue() }
+
+var (
+	_ slog.LogValuer = stringValuer{}
+	_ slog.LogValuer = emptyGroupValuer{}
+)
+
+func TestLogValuerStoredResolved(t *testing.T) {
+	t.Parallel()
+	// "Attr's values should be resolved" — a stdlib handler renders the
+	// LogValue result; the captured record must hold it, not the raw valuer.
+
+	t.Run("record attr", func(t *testing.T) {
+		t.Parallel()
+		logger, rec := New()
+		logger.Info("m", "k", stringValuer{})
+
+		attrs := recordAttrs(t, rec.Records()[0])
+		if len(attrs) != 1 || attrs[0].Value.Kind() != slog.KindString {
+			t.Fatalf("attrs = %v, want one resolved string attr", attrs)
+		}
+		if got := attrs[0].Value.String(); got != "resolved" {
+			t.Errorf("captured value = %q, want %q (value must be stored resolved)", got, "resolved")
+		}
+	})
+
+	t.Run("derivation attr", func(t *testing.T) {
+		t.Parallel()
+		logger, rec := New()
+		logger.With("k", stringValuer{}).Info("m")
+
+		attrs := recordAttrs(t, rec.Records()[0])
+		if len(attrs) != 1 || attrs[0].Value.Kind() != slog.KindString || attrs[0].Value.String() != "resolved" {
+			t.Errorf("attrs = %v, want [k=resolved] (WithAttrs must resolve at derivation time)", attrs)
+		}
+	})
+
+	t.Run("valuer resolving to an empty group is dropped", func(t *testing.T) {
+		t.Parallel()
+		// Resolution happens before the group rules: a valuer whose LogValue
+		// is an empty group reaches the handler unelided (it is not a group
+		// until resolved) and must then drop like any other empty group.
+		logger, rec := New()
+		logger.Info("m", "g", emptyGroupValuer{})
+
+		if n := rec.Records()[0].NumAttrs(); n != 0 {
+			t.Errorf("NumAttrs = %d, want 0 (a valuer resolving to an empty group must drop)", n)
+		}
+	})
+}
+
+func TestGroupOfOnlyDegenerateAttrsDropsEntirely(t *testing.T) {
+	t.Parallel()
+	// Emptiness is judged after inner normalization: a group whose children
+	// all normalize away — a zero Attr, an empty inner group — is itself empty
+	// and drops entirely, as a stdlib handler backs out a group it never wrote
+	// anything into.
+	logger, rec := New()
+	logger.Info("m", slog.Group("outer", slog.Attr{}, slog.Group("inner")))
+
+	if n := rec.Records()[0].NumAttrs(); n != 0 {
+		t.Errorf("NumAttrs = %d, want 0 (a group of only degenerate attrs must drop entirely)", n)
+	}
+}
