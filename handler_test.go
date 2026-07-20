@@ -118,6 +118,26 @@ func TestSetupInstallsDefault(t *testing.T) {
 	}
 }
 
+func TestSetupLevelVarControlsInstalledLogger(t *testing.T) {
+	// Not parallel: mutates the global slog default. Restore it afterward.
+	old := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(old) })
+
+	var buf bytes.Buffer
+	lv := Setup(Options{Output: &buf})
+
+	slog.Debug("suppressed")
+	if buf.Len() != 0 {
+		t.Fatalf("Debug emitted at the Info default: %q", buf.String())
+	}
+
+	lv.Set(slog.LevelDebug)
+	slog.Debug("now-visible")
+	if !strings.Contains(buf.String(), "msg=now-visible") {
+		t.Errorf("the LevelVar Setup returned does not control the installed logger: %q", buf.String())
+	}
+}
+
 func TestNewHandlerNilOutputDefaultsToStderr(t *testing.T) {
 	// Not parallel: temporarily swaps the global os.Stderr.
 	old := os.Stderr

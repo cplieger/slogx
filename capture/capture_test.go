@@ -399,3 +399,36 @@ func TestCountExact(t *testing.T) {
 		t.Errorf("CountExact(\"\") = %d, want 0 when no record has an empty message", got)
 	}
 }
+
+func TestDerivedHandlePreservesRecordFields(t *testing.T) {
+	t.Parallel()
+	// derived.Handle rebuilds the record via slog.NewRecord to materialize the
+	// derivation prefix; the rebuilt record must carry the original Time,
+	// Level, PC, and Message, exactly as the root path does. Debug also pins
+	// derived.Enabled's record-everything contract below the default level.
+	logger, rec := New()
+	before := time.Now()
+	logger.With("base", 1).Debug("boom", "k", "v")
+	after := time.Now()
+
+	records := rec.Records()
+	if len(records) != 1 {
+		t.Fatalf("Len = %d, want 1 (derived handles must capture below the default Info level)", len(records))
+	}
+	r := records[0]
+	if r.Level != slog.LevelDebug {
+		t.Errorf("derived record Level = %v, want Debug", r.Level)
+	}
+	if r.Time.Before(before) || r.Time.After(after) {
+		t.Errorf("derived record Time = %v, want within [%v, %v]", r.Time, before, after)
+	}
+	if r.PC == 0 {
+		t.Error("derived record PC = 0, want the original call-site PC preserved")
+	}
+	if r.Message != "boom" {
+		t.Errorf("derived record Message = %q, want %q", r.Message, "boom")
+	}
+	if n := r.NumAttrs(); n != 2 {
+		t.Errorf("derived record NumAttrs = %d, want 2 (base + call-site)", n)
+	}
+}
