@@ -127,6 +127,39 @@ func TestStoredRecordsDoNotAliasCallerGroupSlices(t *testing.T) {
 	}
 }
 
+func TestDerivedRecordsDoNotAliasCallerGroupSlices(t *testing.T) {
+	t.Parallel()
+
+	t.Run("inherited attrs are fixed at derivation time", func(t *testing.T) {
+		logger, rec := New()
+		children := []slog.Attr{slog.String("k", "before")}
+		derived := logger.With(slog.Attr{Key: "g", Value: slog.GroupValue(children...)})
+
+		children[0] = slog.String("k", "after")
+		derived.Info("m")
+
+		got := recordAttrs(t, rec.Records()[0])[0].Value.Group()
+		if len(got) != 1 || got[0].Value.String() != "before" {
+			t.Errorf("captured inherited group = %v, want [k=before] (derived attrs aliased the caller's slice)", got)
+		}
+	})
+
+	t.Run("call-site attrs are fixed at handle time", func(t *testing.T) {
+		logger, rec := New()
+		derived := logger.With("base", 1)
+		children := []slog.Attr{slog.String("k", "before")}
+
+		derived.LogAttrs(context.Background(), slog.LevelInfo, "m",
+			slog.Attr{Key: "g", Value: slog.GroupValue(children...)})
+		children[0] = slog.String("k", "after")
+
+		got := recordAttrs(t, rec.Records()[0])[1].Value.Group()
+		if len(got) != 1 || got[0].Value.String() != "before" {
+			t.Errorf("captured call-site group = %v, want [k=before] (derived Handle aliased the caller's slice)", got)
+		}
+	})
+}
+
 func TestWithAttrsAndGroupStillCapture(t *testing.T) {
 	t.Parallel()
 	logger, rec := New()

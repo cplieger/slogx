@@ -191,8 +191,8 @@ func cloneRecord(r *slog.Record) slog.Record {
 	return clone
 }
 
-// cloneAttr returns a with any group value (recursively) rebuilt on fresh
-// backing storage; non-group attrs are returned as-is.
+// cloneAttr returns an Attr with any group value (recursively) rebuilt on
+// fresh backing storage; non-group attrs are returned as-is.
 func cloneAttr(a slog.Attr) slog.Attr {
 	if a.Value.Kind() != slog.KindGroup {
 		return a
