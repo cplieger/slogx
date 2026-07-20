@@ -167,12 +167,43 @@ func appendOp(ops []op, next op) []op {
 	return out
 }
 
+// cloneRecord deep-copies a record so the snapshot's group values get fresh
+// backing storage: slog.Record.Clone does not recursively copy KindGroup
+// values, whose Group() result aliases the stored record's mutable slice.
+func cloneRecord(r *slog.Record) slog.Record {
+	clone := slog.NewRecord(r.Time, r.Level, r.Message, r.PC)
+	r.Attrs(func(a slog.Attr) bool {
+		clone.AddAttrs(cloneAttr(a))
+		return true
+	})
+	return clone
+}
+
+// cloneAttr returns a with any group value (recursively) rebuilt on fresh
+// backing storage; non-group attrs are returned as-is.
+func cloneAttr(a slog.Attr) slog.Attr {
+	if a.Value.Kind() != slog.KindGroup {
+		return a
+	}
+	attrs := a.Value.Group()
+	cloned := make([]slog.Attr, len(attrs))
+	for i := range attrs {
+		cloned[i] = cloneAttr(attrs[i])
+	}
+	a.Value = slog.GroupValue(cloned...)
+	return a
+}
+
 // Records returns a snapshot copy of the captured records, in order. Mutating
 // or extending the result does not affect later captures.
 func (rec *Recorder) Records() []slog.Record {
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
-	return slices.Clone(rec.records)
+	records := make([]slog.Record, len(rec.records))
+	for i := range rec.records {
+		records[i] = cloneRecord(&rec.records[i])
+	}
+	return records
 }
 
 // Len returns the number of captured records.

@@ -2,11 +2,13 @@ package slogx
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"log/slog"
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNewHandlerTextToBuffer(t *testing.T) {
@@ -36,15 +38,18 @@ func TestNewHandlerJSONToBuffer(t *testing.T) {
 
 func TestNewHandlerUTCNormalizesTime(t *testing.T) {
 	t.Parallel()
-	// UTCTime is wired, so the emitted timestamp is UTC — RFC3339 renders that
-	// with a trailing Z even when the host TZ has a non-zero offset (a missing
-	// UTCTime on such a host would render a +hh:mm offset instead).
 	var buf bytes.Buffer
 	handler, _ := NewHandler(Options{Output: &buf})
-	slog.New(handler).Info("hi")
+	zone := time.FixedZone("plusfive", 5*60*60)
+	record := slog.NewRecord(time.Date(2026, 7, 10, 12, 0, 0, 0, zone), slog.LevelInfo, "hi", 0)
+
+	if err := handler.Handle(context.Background(), record); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
 	timeField, _, _ := strings.Cut(buf.String(), " ")
-	if !strings.HasPrefix(timeField, "time=") || !strings.HasSuffix(timeField, "Z") {
-		t.Errorf("time field %q is not a UTC (…Z) timestamp", timeField)
+	if timeField != "time=2026-07-10T07:00:00.000Z" {
+		t.Errorf("time field = %q, want UTC-normalized %q", timeField, "time=2026-07-10T07:00:00.000Z")
 	}
 }
 

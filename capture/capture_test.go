@@ -37,6 +37,25 @@ func TestRecordsReturnsSnapshotCopy(t *testing.T) {
 	}
 }
 
+func TestRecordsSnapshotGroupsAreIsolated(t *testing.T) {
+	t.Parallel()
+	// A snapshot's group values must have fresh backing storage: mutating a
+	// group slice fetched from one Records() call must not be visible in the
+	// stored record or a later snapshot.
+	logger, rec := New()
+	logger.WithGroup("g").Info("m", "k", "before")
+
+	first := rec.Records()
+	grp := recordAttrs(t, first[0])[0].Value.Group()
+	grp[0] = slog.String("k", "mutated")
+
+	second := rec.Records()
+	got := recordAttrs(t, second[0])[0].Value.Group()
+	if len(got) != 1 || got[0].Key != "k" || got[0].Value.String() != "before" {
+		t.Errorf("second snapshot group = %v, want [k=before] (snapshot mutation leaked into the recorder)", got)
+	}
+}
+
 func TestWithAttrsAndGroupStillCapture(t *testing.T) {
 	t.Parallel()
 	logger, rec := New()
