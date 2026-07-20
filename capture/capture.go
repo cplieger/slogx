@@ -60,7 +60,7 @@ func (rec *Recorder) Enabled(context.Context, slog.Level) bool { return true }
 //
 //nolint:gocritic // Handle's signature is fixed by the slog.Handler interface; r cannot be a pointer.
 func (rec *Recorder) Handle(_ context.Context, r slog.Record) error {
-	clone := r.Clone()
+	clone := cloneRecord(&r)
 	rec.append(&clone)
 	return nil
 }
@@ -80,7 +80,7 @@ func (rec *Recorder) WithAttrs(attrs []slog.Attr) slog.Handler {
 	if len(attrs) == 0 {
 		return rec
 	}
-	return &derived{rec: rec, ops: []op{{attrs: attrs}}}
+	return &derived{rec: rec, ops: []op{{attrs: cloneAttrs(attrs)}}}
 }
 
 // WithGroup returns a handler that records through this Recorder with
@@ -120,7 +120,7 @@ func (d *derived) Enabled(context.Context, slog.Level) bool { return true }
 func (d *derived) Handle(_ context.Context, r slog.Record) error {
 	attrs := make([]slog.Attr, 0, r.NumAttrs())
 	r.Attrs(func(a slog.Attr) bool {
-		attrs = append(attrs, a)
+		attrs = append(attrs, cloneAttr(a))
 		return true
 	})
 	for _, o := range slices.Backward(d.ops) {
@@ -146,7 +146,7 @@ func (d *derived) WithAttrs(attrs []slog.Attr) slog.Handler {
 	if len(attrs) == 0 {
 		return d
 	}
-	return &derived{rec: d.rec, ops: appendOp(d.ops, op{attrs: attrs})}
+	return &derived{rec: d.rec, ops: appendOp(d.ops, op{attrs: cloneAttrs(attrs)})}
 }
 
 // WithGroup returns a new handle extending the derivation with a group. An
@@ -167,6 +167,18 @@ func appendOp(ops []op, next op) []op {
 	return out
 }
 
+// Records returns a snapshot copy of the captured records, in order. Mutating
+// or extending the result does not affect later captures.
+func (rec *Recorder) Records() []slog.Record {
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	records := make([]slog.Record, len(rec.records))
+	for i := range rec.records {
+		records[i] = cloneRecord(&rec.records[i])
+	}
+	return records
+}
+
 // cloneRecord deep-copies a record so the snapshot's group values get fresh
 // backing storage: slog.Record.Clone does not recursively copy KindGroup
 // values, whose Group() result aliases the stored record's mutable slice.
@@ -185,25 +197,19 @@ func cloneAttr(a slog.Attr) slog.Attr {
 	if a.Value.Kind() != slog.KindGroup {
 		return a
 	}
-	attrs := a.Value.Group()
+	a.Value = slog.GroupValue(cloneAttrs(a.Value.Group())...)
+	return a
+}
+
+// cloneAttrs deep-copies a slice of attrs onto fresh backing storage via
+// cloneAttr, so stored content is fixed at capture/derivation time the way a
+// real handler's rendered output is.
+func cloneAttrs(attrs []slog.Attr) []slog.Attr {
 	cloned := make([]slog.Attr, len(attrs))
 	for i := range attrs {
 		cloned[i] = cloneAttr(attrs[i])
 	}
-	a.Value = slog.GroupValue(cloned...)
-	return a
-}
-
-// Records returns a snapshot copy of the captured records, in order. Mutating
-// or extending the result does not affect later captures.
-func (rec *Recorder) Records() []slog.Record {
-	rec.mu.Lock()
-	defer rec.mu.Unlock()
-	records := make([]slog.Record, len(rec.records))
-	for i := range rec.records {
-		records[i] = cloneRecord(&rec.records[i])
-	}
-	return records
+	return cloned
 }
 
 // Len returns the number of captured records.

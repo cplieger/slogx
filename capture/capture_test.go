@@ -1,9 +1,11 @@
 package capture
 
 import (
+	"context"
 	"log/slog"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestNewCapturesInjectedLogger(t *testing.T) {
@@ -53,6 +55,75 @@ func TestRecordsSnapshotGroupsAreIsolated(t *testing.T) {
 	got := recordAttrs(t, second[0])[0].Value.Group()
 	if len(got) != 1 || got[0].Key != "k" || got[0].Value.String() != "before" {
 		t.Errorf("second snapshot group = %v, want [k=before] (snapshot mutation leaked into the recorder)", got)
+	}
+}
+
+func TestRecordsSnapshotNestedGroupsAreIsolated(t *testing.T) {
+	t.Parallel()
+	// cloneAttr must rebuild group values RECURSIVELY: mutating an inner
+	// (nested) group slice fetched from one Records() call must not be visible
+	// in a later snapshot. A shallow one-level copy would pass the flat-group
+	// isolation test but alias the nested slice.
+	logger, rec := New()
+	logger.WithGroup("outer").WithGroup("inner").Info("m", "k", "before")
+
+	first := rec.Records()
+	outer := recordAttrs(t, first[0])[0].Value.Group()
+	innerGrp := outer[0].Value.Group()
+	innerGrp[0] = slog.String("k", "mutated")
+
+	second := rec.Records()
+	got := recordAttrs(t, second[0])[0].Value.Group()[0].Value.Group()
+	if len(got) != 1 || got[0].Key != "k" || got[0].Value.String() != "before" {
+		t.Errorf("second snapshot nested group = %v, want [k=before] (nested-group snapshot mutation leaked into the recorder)", got)
+	}
+}
+
+func TestRecordsSnapshotPreservesRecordFields(t *testing.T) {
+	t.Parallel()
+	// cloneRecord rebuilds each record via slog.NewRecord; the snapshot must
+	// carry the original Time, Level, and PC through that rebuild.
+	logger, rec := New()
+	before := time.Now()
+	logger.Error("boom", "k", "v")
+	after := time.Now()
+
+	records := rec.Records()
+	if len(records) != 1 {
+		t.Fatalf("Len = %d, want 1", len(records))
+	}
+	r := records[0]
+	if r.Level != slog.LevelError {
+		t.Errorf("snapshot Level = %v, want Error", r.Level)
+	}
+	if r.Time.Before(before) || r.Time.After(after) {
+		t.Errorf("snapshot Time = %v, want within [%v, %v]", r.Time, before, after)
+	}
+	if r.PC == 0 {
+		t.Error("snapshot PC = 0, want the original call-site PC preserved")
+	}
+	if r.Message != "boom" {
+		t.Errorf("snapshot Message = %q, want %q", r.Message, "boom")
+	}
+	if n := r.NumAttrs(); n != 1 {
+		t.Errorf("snapshot NumAttrs = %d, want 1", n)
+	}
+}
+
+func TestStoredRecordsDoNotAliasCallerGroupSlices(t *testing.T) {
+	t.Parallel()
+	// A real handler fixes rendered content at Handle time; mutating a group
+	// slice the caller retained after logging must not change what was captured.
+	logger, rec := New()
+	kids := []slog.Attr{slog.String("k", "before")}
+	logger.LogAttrs(context.Background(), slog.LevelInfo, "m",
+		slog.Attr{Key: "g", Value: slog.GroupValue(kids...)})
+
+	kids[0] = slog.String("k", "after")
+
+	got := recordAttrs(t, rec.Records()[0])[0].Value.Group()
+	if len(got) != 1 || got[0].Value.String() != "before" {
+		t.Errorf("captured group = %v, want [k=before] (stored record aliased the caller's slice)", got)
 	}
 }
 
