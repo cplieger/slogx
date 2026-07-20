@@ -70,8 +70,7 @@ func (rec *Recorder) Enabled(context.Context, slog.Level) bool { return true }
 //
 //nolint:gocritic // Handle's signature is fixed by the slog.Handler interface; r cannot be a pointer.
 func (rec *Recorder) Handle(_ context.Context, r slog.Record) error {
-	nr := slog.NewRecord(r.Time, r.Level, r.Message, r.PC)
-	nr.AddAttrs(normalizedRecordAttrs(&r)...)
+	nr := materialize(&r)
 	rec.append(&nr)
 	return nil
 }
@@ -230,49 +229,31 @@ func normalizeAttrs(attrs []slog.Attr) []slog.Attr {
 	return out
 }
 
-// Records returns a snapshot copy of the captured records, in order. Mutating
+// materialize returns a copy of r rebuilt through normalizedRecordAttrs, so
+// every group value sits on freshly allocated backing storage. Handle uses it
+// to fix content at ingestion; Records reuses it for snapshot isolation,
+// which is sound because normalizeAttrs is idempotent on already-normalized
+// attrs (values are already resolved, degenerate attrs already dropped) and
+// always rebuilds group values on fresh slices.
+func materialize(r *slog.Record) slog.Record {
+	nr := slog.NewRecord(r.Time, r.Level, r.Message, r.PC)
+	nr.AddAttrs(normalizedRecordAttrs(r)...)
+	return nr
+}
+
+// Records returns a snapshot copy of the captured records, in order. Each
+// record is rebuilt through materialize so its group values get fresh backing
+// storage (slog.Record.Clone does not recursively copy KindGroup values,
+// whose Group() result aliases the stored record's mutable slice); mutating
 // or extending the result does not affect later captures.
 func (rec *Recorder) Records() []slog.Record {
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
 	records := make([]slog.Record, len(rec.records))
 	for i := range rec.records {
-		records[i] = cloneRecord(&rec.records[i])
+		records[i] = materialize(&rec.records[i])
 	}
 	return records
-}
-
-// cloneRecord deep-copies a record so the snapshot's group values get fresh
-// backing storage: slog.Record.Clone does not recursively copy KindGroup
-// values, whose Group() result aliases the stored record's mutable slice.
-func cloneRecord(r *slog.Record) slog.Record {
-	clone := slog.NewRecord(r.Time, r.Level, r.Message, r.PC)
-	r.Attrs(func(a slog.Attr) bool {
-		clone.AddAttrs(cloneAttr(a))
-		return true
-	})
-	return clone
-}
-
-// cloneAttr returns an Attr with any group value (recursively) rebuilt on
-// fresh backing storage; non-group attrs are returned as-is.
-func cloneAttr(a slog.Attr) slog.Attr {
-	if a.Value.Kind() != slog.KindGroup {
-		return a
-	}
-	a.Value = slog.GroupValue(cloneAttrs(a.Value.Group())...)
-	return a
-}
-
-// cloneAttrs deep-copies a slice of attrs onto fresh backing storage via
-// cloneAttr, so a snapshot's content is isolated from the recorder's stored
-// records.
-func cloneAttrs(attrs []slog.Attr) []slog.Attr {
-	cloned := make([]slog.Attr, len(attrs))
-	for i := range attrs {
-		cloned[i] = cloneAttr(attrs[i])
-	}
-	return cloned
 }
 
 // Len returns the number of captured records.

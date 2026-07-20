@@ -76,7 +76,7 @@ h := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{ReplaceAttr: slogx.UTCT
 - `NewHandler(Options) (slog.Handler, *slog.LevelVar)` — the same without the `SetDefault`, for composition.
 - `Options{Output, Format, Level, AddSource}` — zero value is a text handler at Info on stderr.
 - `Format` — `Text` (logfmt, default) or `JSON`; any other value is a programmer error and makes `NewHandler`/`Setup` panic (`ParseFormat` only ever produces the two constants).
-- `ParseLevel(raw string, def slog.Level) (slog.Level, bool)` — parse a level string (case-insensitive, `warning` alias, slog offset syntax); `ok=false` on a non-empty unparseable value.
+- `ParseLevel(raw string, def slog.Level) (slog.Level, bool)` — parse a level string (case-insensitive, `warning` alias, slog offset syntax; the alias composes with offsets, so `warning+1` parses like `warn+1`); `ok=false` on a non-empty unparseable value.
 - `ParseFormat(raw string, def Format) (Format, bool)` — parse a format string (`text`/`json`, case-insensitive, trimmed); same contract as `ParseLevel`: empty returns the default with `ok=true`, a non-empty unrecognized value returns the default with `ok=false` so the caller can warn.
 - `UTCTime(groups []string, a slog.Attr) slog.Attr` — the ReplaceAttr that renders timestamps in UTC.
 - `capture` (subpackage `slogx/capture`) — a record-capturing `slog.Handler` for tests; see [Testing](#testing).
