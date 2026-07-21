@@ -33,7 +33,8 @@ import (
 // honored per the slog.Handler contract: handles returned by WithAttrs and
 // WithGroup record through the same Recorder, with their inherited attributes
 // and groups materialized into each stored record. It is safe for concurrent
-// use.
+// use, and the zero value is ready to use: &Recorder{} is a working handler
+// (New and Default are conveniences, not required constructors).
 type Recorder struct {
 	records []slog.Record
 	mu      sync.Mutex
@@ -346,17 +347,18 @@ func (rec *Recorder) AttrContains(msgSub, key, sub string) bool {
 }
 
 // CountLevel returns how many captured records at exactly level have a
-// Message beginning with msgPrefix ("" counts every record at that level).
-// It exists for level-escalation contracts - a WARN log site that flips to
+// Message containing msgSub ("" counts every record at that level). It
+// exists for level-escalation contracts - a WARN log site that flips to
 // ERROR past a threshold - where the assertion is precisely "one ERROR and
 // zero WARN of this message", which the level-blind Count family cannot
-// express.
-func (rec *Recorder) CountLevel(level slog.Level, msgPrefix string) int {
+// express. Message matching is by substring, the same vocabulary as Count,
+// Contains, and the attr helpers' msgSub.
+func (rec *Recorder) CountLevel(level slog.Level, msgSub string) int {
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
 	n := 0
 	for i := range rec.records {
-		if rec.records[i].Level == level && strings.HasPrefix(rec.records[i].Message, msgPrefix) {
+		if rec.records[i].Level == level && strings.Contains(rec.records[i].Message, msgSub) {
 			n++
 		}
 	}
@@ -364,10 +366,13 @@ func (rec *Recorder) CountLevel(level slog.Level, msgPrefix string) int {
 }
 
 // scanAttrs is the shared walk behind the attr helpers: it visits captured
-// records in order (materialized, so WithAttrs derivations are folded in and
-// degenerate attrs dropped), scopes by Message-contains-msgSub and
-// attr-key-equals-key (either "" = wildcard), and reports whether match
-// accepted any rendered value. A true from match stops the scan.
+// records in order, scopes by Message-contains-msgSub and attr-key-equals-key
+// (either "" = wildcard), and reports whether match accepted any rendered
+// value. A true from match stops the scan. Records are stored materialized
+// (Handle folds derivations in and drops degenerate attrs at ingestion), so
+// the scan reads them in place; only rendered strings leave the lock, never
+// a reference into the buffer, which is why it needs no Records()-style
+// defensive copy.
 func (rec *Recorder) scanAttrs(msgSub, key string, match func(rendered string) bool) bool {
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
@@ -375,9 +380,8 @@ func (rec *Recorder) scanAttrs(msgSub, key string, match func(rendered string) b
 		if msgSub != "" && !strings.Contains(rec.records[i].Message, msgSub) {
 			continue
 		}
-		r := materialize(&rec.records[i])
 		found := false
-		r.Attrs(func(a slog.Attr) bool {
+		rec.records[i].Attrs(func(a slog.Attr) bool {
 			if key != "" && a.Key != key {
 				return true
 			}

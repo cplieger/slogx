@@ -113,7 +113,19 @@ c := NewComponent(WithLogger(logger))
 `Count` matches by substring; `CountExact` matches the whole message. Reach for
 `CountExact` when a message is pinned by an external contract (a log-based
 alert rule matching the exact `msg`), where a substring count would false-pass
-on a superstring message.
+on a superstring message. `CountLevel(level, sub)` scopes the substring count
+to records at exactly one level, for escalation contracts ("one ERROR and zero
+WARN of this message") that the level-blind counters cannot express.
+
+Attribute-level assertions cover a record's top-level attributes, with
+`Logger.With` derivations already folded in: `AttrValue(msgSub, key)` returns
+the first match's rendered value, `HasAttr(msgSub, key, rendered)` pins an
+exact rendered value, and `AttrContains(msgSub, key, sub)` matches the value
+by substring. Values compare by their rendered form (`slog.Value.String()`),
+so an `Int64` 7 and a string `"7"` both satisfy `"7"` — kind-agnostic on
+purpose. The empty string is a wildcard for both scoping parameters (`msgSub`
+`""` matches every record, `key` `""` matches every attribute); values nested
+inside groups are out of scope — walk `Records()` for those.
 
 `capture` is a separate package so its `testing` import and record buffer never
 reach production consumers of `slogx`; import it only from `_test.go` files.
