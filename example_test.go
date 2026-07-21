@@ -17,3 +17,14 @@ func ExampleParseLevel() {
 	// WARN true
 	// false
 }
+
+func ExampleParseFormat() {
+	format, ok := slogx.ParseFormat("JSON", slogx.Text)
+	fmt.Println(format == slogx.JSON, ok)
+
+	_, ok = slogx.ParseFormat("yaml", slogx.Text)
+	fmt.Println(ok)
+	// Output:
+	// true true
+	// false
+}

@@ -1,9 +1,11 @@
 package capture
 
 import (
+	"context"
 	"log/slog"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestNewCapturesInjectedLogger(t *testing.T) {
@@ -35,6 +37,127 @@ func TestRecordsReturnsSnapshotCopy(t *testing.T) {
 	if len(snap) != 1 {
 		t.Errorf("snapshot len = %d, want 1 (a later log must not grow an earlier snapshot)", len(snap))
 	}
+}
+
+func TestRecordsSnapshotGroupsAreIsolated(t *testing.T) {
+	t.Parallel()
+	// A snapshot's group values must have fresh backing storage: mutating a
+	// group slice fetched from one Records() call must not be visible in the
+	// stored record or a later snapshot.
+	logger, rec := New()
+	logger.WithGroup("g").Info("m", "k", "before")
+
+	first := rec.Records()
+	grp := recordAttrs(t, first[0])[0].Value.Group()
+	grp[0] = slog.String("k", "mutated")
+
+	second := rec.Records()
+	got := recordAttrs(t, second[0])[0].Value.Group()
+	if len(got) != 1 || got[0].Key != "k" || got[0].Value.String() != "before" {
+		t.Errorf("second snapshot group = %v, want [k=before] (snapshot mutation leaked into the recorder)", got)
+	}
+}
+
+func TestRecordsSnapshotNestedGroupsAreIsolated(t *testing.T) {
+	t.Parallel()
+	// materialize must rebuild group values RECURSIVELY: mutating an inner
+	// (nested) group slice fetched from one Records() call must not be visible
+	// in a later snapshot. A shallow one-level copy would pass the flat-group
+	// isolation test but alias the nested slice.
+	logger, rec := New()
+	logger.WithGroup("outer").WithGroup("inner").Info("m", "k", "before")
+
+	first := rec.Records()
+	outer := recordAttrs(t, first[0])[0].Value.Group()
+	innerGrp := outer[0].Value.Group()
+	innerGrp[0] = slog.String("k", "mutated")
+
+	second := rec.Records()
+	got := recordAttrs(t, second[0])[0].Value.Group()[0].Value.Group()
+	if len(got) != 1 || got[0].Key != "k" || got[0].Value.String() != "before" {
+		t.Errorf("second snapshot nested group = %v, want [k=before] (nested-group snapshot mutation leaked into the recorder)", got)
+	}
+}
+
+func TestRecordsSnapshotPreservesRecordFields(t *testing.T) {
+	t.Parallel()
+	// materialize rebuilds each record via slog.NewRecord; the snapshot must
+	// carry the original Time, Level, and PC through that rebuild.
+	logger, rec := New()
+	before := time.Now()
+	logger.Error("boom", "k", "v")
+	after := time.Now()
+
+	records := rec.Records()
+	if len(records) != 1 {
+		t.Fatalf("Len = %d, want 1", len(records))
+	}
+	r := records[0]
+	if r.Level != slog.LevelError {
+		t.Errorf("snapshot Level = %v, want Error", r.Level)
+	}
+	if r.Time.Before(before) || r.Time.After(after) {
+		t.Errorf("snapshot Time = %v, want within [%v, %v]", r.Time, before, after)
+	}
+	if r.PC == 0 {
+		t.Error("snapshot PC = 0, want the original call-site PC preserved")
+	}
+	if r.Message != "boom" {
+		t.Errorf("snapshot Message = %q, want %q", r.Message, "boom")
+	}
+	if n := r.NumAttrs(); n != 1 {
+		t.Errorf("snapshot NumAttrs = %d, want 1", n)
+	}
+}
+
+func TestStoredRecordsDoNotAliasCallerGroupSlices(t *testing.T) {
+	t.Parallel()
+	// A real handler fixes rendered content at Handle time; mutating a group
+	// slice the caller retained after logging must not change what was captured.
+	logger, rec := New()
+	kids := []slog.Attr{slog.String("k", "before")}
+	logger.LogAttrs(context.Background(), slog.LevelInfo, "m",
+		slog.Attr{Key: "g", Value: slog.GroupValue(kids...)})
+
+	kids[0] = slog.String("k", "after")
+
+	got := recordAttrs(t, rec.Records()[0])[0].Value.Group()
+	if len(got) != 1 || got[0].Value.String() != "before" {
+		t.Errorf("captured group = %v, want [k=before] (stored record aliased the caller's slice)", got)
+	}
+}
+
+func TestDerivedRecordsDoNotAliasCallerGroupSlices(t *testing.T) {
+	t.Parallel()
+
+	t.Run("inherited attrs are fixed at derivation time", func(t *testing.T) {
+		logger, rec := New()
+		children := []slog.Attr{slog.String("k", "before")}
+		derived := logger.With(slog.Attr{Key: "g", Value: slog.GroupValue(children...)})
+
+		children[0] = slog.String("k", "after")
+		derived.Info("m")
+
+		got := recordAttrs(t, rec.Records()[0])[0].Value.Group()
+		if len(got) != 1 || got[0].Value.String() != "before" {
+			t.Errorf("captured inherited group = %v, want [k=before] (derived attrs aliased the caller's slice)", got)
+		}
+	})
+
+	t.Run("call-site attrs are fixed at handle time", func(t *testing.T) {
+		logger, rec := New()
+		derived := logger.With("base", 1)
+		children := []slog.Attr{slog.String("k", "before")}
+
+		derived.LogAttrs(context.Background(), slog.LevelInfo, "m",
+			slog.Attr{Key: "g", Value: slog.GroupValue(children...)})
+		children[0] = slog.String("k", "after")
+
+		got := recordAttrs(t, rec.Records()[0])[1].Value.Group()
+		if len(got) != 1 || got[0].Value.String() != "before" {
+			t.Errorf("captured call-site group = %v, want [k=before] (derived Handle aliased the caller's slice)", got)
+		}
+	})
 }
 
 func TestWithAttrsAndGroupStillCapture(t *testing.T) {
@@ -274,5 +397,266 @@ func TestCountExact(t *testing.T) {
 	}
 	if got := rec.CountExact(""); got != 0 {
 		t.Errorf("CountExact(\"\") = %d, want 0 when no record has an empty message", got)
+	}
+}
+
+func TestDerivedHandlePreservesRecordFields(t *testing.T) {
+	t.Parallel()
+	// derived.Handle rebuilds the record via slog.NewRecord to materialize the
+	// derivation prefix; the rebuilt record must carry the original Time,
+	// Level, PC, and Message, exactly as the root path does. Debug also pins
+	// derived.Enabled's record-everything contract below the default level.
+	logger, rec := New()
+	before := time.Now()
+	logger.With("base", 1).Debug("boom", "k", "v")
+	after := time.Now()
+
+	records := rec.Records()
+	if len(records) != 1 {
+		t.Fatalf("Len = %d, want 1 (derived handles must capture below the default Info level)", len(records))
+	}
+	r := records[0]
+	if r.Level != slog.LevelDebug {
+		t.Errorf("derived record Level = %v, want Debug", r.Level)
+	}
+	if r.Time.Before(before) || r.Time.After(after) {
+		t.Errorf("derived record Time = %v, want within [%v, %v]", r.Time, before, after)
+	}
+	if r.PC == 0 {
+		t.Error("derived record PC = 0, want the original call-site PC preserved")
+	}
+	if r.Message != "boom" {
+		t.Errorf("derived record Message = %q, want %q", r.Message, "boom")
+	}
+	if n := r.NumAttrs(); n != 2 {
+		t.Errorf("derived record NumAttrs = %d, want 2 (base + call-site)", n)
+	}
+}
+
+func TestEmptyGroupRecordAttrElidedWithEnclosingGroup(t *testing.T) {
+	t.Parallel()
+	// stdlib parity: an empty group renders nothing, so a derivation group
+	// whose only content was that attr is elided too — a stdlib handler emits
+	// just msg=m. The second case only becomes empty after inner normalization
+	// (its sole child is a zero Attr); it used to defeat the enclosing-group
+	// elision.
+	for _, tc := range []struct {
+		name string
+		attr slog.Attr
+	}{
+		{name: "empty group", attr: slog.Group("empty")},
+		{name: "group holding only a zero attr", attr: slog.Group("empty", slog.Attr{})},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			logger, rec := New()
+			logger.WithGroup("g").LogAttrs(context.Background(), slog.LevelInfo, "m", tc.attr)
+
+			records := rec.Records()
+			if len(records) != 1 {
+				t.Fatalf("Len = %d, want 1", len(records))
+			}
+			if n := records[0].NumAttrs(); n != 0 {
+				t.Errorf("NumAttrs = %d, want 0 (a degenerate record attr must not defeat enclosing-group elision)", n)
+			}
+		})
+	}
+}
+
+func TestZeroAttrDropped(t *testing.T) {
+	t.Parallel()
+	// "If an Attr's key and value are both the zero value, ignore the Attr" —
+	// a stdlib handler renders nothing for slog.Attr{}; capture must match.
+	logger, rec := New()
+	logger.LogAttrs(context.Background(), slog.LevelInfo, "m", slog.Attr{}, slog.String("k", "v"))
+
+	attrs := recordAttrs(t, rec.Records()[0])
+	if len(attrs) != 1 || attrs[0].Key != "k" || attrs[0].Value.String() != "v" {
+		t.Errorf("attrs = %v, want [k=v] (the zero Attr must be dropped)", attrs)
+	}
+}
+
+func TestWithEmptyGroupDerivationElided(t *testing.T) {
+	t.Parallel()
+	// Logger.With hands attrs to WithAttrs unfiltered; stdlib handlers
+	// preformat them there, and an empty group adds nothing. The whole
+	// derivation op is elided: attrs that normalize to empty return the
+	// receiver, exactly like the empty-slice guard.
+	logger, rec := New()
+	logger.With(slog.Group("empty")).Info("m", "k", "v")
+
+	attrs := recordAttrs(t, rec.Records()[0])
+	if len(attrs) != 1 || attrs[0].Key != "k" {
+		t.Errorf("attrs = %v, want [k=v] (an empty-group With op must be elided)", attrs)
+	}
+
+	degenerate := []slog.Attr{slog.Group("empty"), {}}
+	if got := rec.WithAttrs(degenerate); got != slog.Handler(rec) {
+		t.Error("Recorder.WithAttrs(all-degenerate attrs) did not return the receiver")
+	}
+	d := rec.WithAttrs([]slog.Attr{slog.Int("a", 1)})
+	if got := d.WithAttrs(degenerate); got != d {
+		t.Error("derived.WithAttrs(all-degenerate attrs) did not return the receiver")
+	}
+}
+
+func TestEmptyKeyedGroupInlined(t *testing.T) {
+	t.Parallel()
+	// "If a group's key is empty, inline the group's Attrs" — stdlib handlers
+	// render slog.Group("", a, b) exactly as if a and b were passed directly,
+	// at the top level and nested inside a named group alike.
+	logger, rec := New()
+	logger.Info("top", slog.Group("", slog.String("a", "1"), slog.Int("b", 2)))
+	logger.Info("nested", slog.Group("outer", slog.Group("", slog.String("x", "1"))))
+
+	records := rec.Records()
+	top := recordAttrs(t, records[0])
+	if len(top) != 2 || top[0].Key != "a" || top[0].Value.String() != "1" ||
+		top[1].Key != "b" || top[1].Value.String() != "2" {
+		t.Errorf("top-level attrs = %v, want inlined [a=1 b=2]", top)
+	}
+	nested := recordAttrs(t, records[1])
+	if len(nested) != 1 || nested[0].Key != "outer" || nested[0].Value.Kind() != slog.KindGroup {
+		t.Fatalf("nested attrs = %v, want a single group outer", nested)
+	}
+	grp := nested[0].Value.Group()
+	if len(grp) != 1 || grp[0].Key != "x" || grp[0].Value.String() != "1" {
+		t.Errorf("group outer = %v, want inlined [x=1]", grp)
+	}
+}
+
+// stringValuer is a slog.LogValuer resolving to a fixed string, for asserting
+// that captured values are stored resolved rather than as the raw valuer.
+type stringValuer struct{}
+
+func (stringValuer) LogValue() slog.Value { return slog.StringValue("resolved") }
+
+// emptyGroupValuer is a slog.LogValuer resolving to an empty group, for
+// asserting that resolution happens before the group output rules apply.
+type emptyGroupValuer struct{}
+
+func (emptyGroupValuer) LogValue() slog.Value { return slog.GroupValue() }
+
+var (
+	_ slog.LogValuer = stringValuer{}
+	_ slog.LogValuer = emptyGroupValuer{}
+)
+
+func TestLogValuerStoredResolved(t *testing.T) {
+	t.Parallel()
+	// "Attr's values should be resolved" — a stdlib handler renders the
+	// LogValue result; the captured record must hold it, not the raw valuer.
+
+	t.Run("record attr", func(t *testing.T) {
+		t.Parallel()
+		logger, rec := New()
+		logger.Info("m", "k", stringValuer{})
+
+		attrs := recordAttrs(t, rec.Records()[0])
+		if len(attrs) != 1 || attrs[0].Value.Kind() != slog.KindString {
+			t.Fatalf("attrs = %v, want one resolved string attr", attrs)
+		}
+		if got := attrs[0].Value.String(); got != "resolved" {
+			t.Errorf("captured value = %q, want %q (value must be stored resolved)", got, "resolved")
+		}
+	})
+
+	t.Run("derivation attr", func(t *testing.T) {
+		t.Parallel()
+		logger, rec := New()
+		logger.With("k", stringValuer{}).Info("m")
+
+		attrs := recordAttrs(t, rec.Records()[0])
+		if len(attrs) != 1 || attrs[0].Value.Kind() != slog.KindString || attrs[0].Value.String() != "resolved" {
+			t.Errorf("attrs = %v, want [k=resolved] (WithAttrs must resolve at derivation time)", attrs)
+		}
+	})
+
+	t.Run("valuer resolving to an empty group is dropped", func(t *testing.T) {
+		t.Parallel()
+		// Resolution happens before the group rules: a valuer whose LogValue
+		// is an empty group reaches the handler unelided (it is not a group
+		// until resolved) and must then drop like any other empty group.
+		logger, rec := New()
+		logger.Info("m", "g", emptyGroupValuer{})
+
+		if n := rec.Records()[0].NumAttrs(); n != 0 {
+			t.Errorf("NumAttrs = %d, want 0 (a valuer resolving to an empty group must drop)", n)
+		}
+	})
+}
+
+func TestGroupOfOnlyDegenerateAttrsDropsEntirely(t *testing.T) {
+	t.Parallel()
+	// Emptiness is judged after inner normalization: a group whose children
+	// all normalize away — a zero Attr, an empty inner group — is itself empty
+	// and drops entirely, as a stdlib handler backs out a group it never wrote
+	// anything into.
+	logger, rec := New()
+	logger.Info("m", slog.Group("outer", slog.Attr{}, slog.Group("inner")))
+
+	if n := rec.Records()[0].NumAttrs(); n != 0 {
+		t.Errorf("NumAttrs = %d, want 0 (a group of only degenerate attrs must drop entirely)", n)
+	}
+}
+
+func TestGroupNormalizationRecursesThroughValuers(t *testing.T) {
+	t.Parallel()
+	// Resolution recurses into group children: a LogValuer nested inside a
+	// group is stored resolved, and a child valuer resolving to an empty
+	// group empties its enclosing group, which then drops entirely -- the
+	// resolve rule feeding the group-emptiness rule, as a stdlib handler
+	// renders it.
+	logger, rec := New()
+	logger.Info("m", slog.Group("outer", slog.Any("k", stringValuer{})))
+	logger.Info("n", slog.Group("outer", slog.Any("g", emptyGroupValuer{})))
+
+	records := rec.Records()
+	got := recordAttrs(t, records[0])
+	if len(got) != 1 || got[0].Key != "outer" || got[0].Value.Kind() != slog.KindGroup {
+		t.Fatalf("attrs = %v, want a single group outer", got)
+	}
+	grp := got[0].Value.Group()
+	if len(grp) != 1 || grp[0].Key != "k" || grp[0].Value.Kind() != slog.KindString || grp[0].Value.String() != "resolved" {
+		t.Errorf("group outer = %v, want [k=resolved] (a valuer nested in a group must be stored resolved)", grp)
+	}
+	if n := records[1].NumAttrs(); n != 0 {
+		t.Errorf("NumAttrs = %d, want 0 (a group whose only child resolves to an empty group must drop entirely)", n)
+	}
+}
+
+func TestEmptyKeyedGroupInlinedAtDerivation(t *testing.T) {
+	t.Parallel()
+	// WithAttrs normalizes at derivation time: an empty-keyed group handed to
+	// Logger.With is inlined into the derivation prefix, so its attrs land at
+	// the top level ahead of call-site attrs -- the same shape a stdlib
+	// handler renders for With(slog.Group("", ...)).
+	logger, rec := New()
+	logger.With(slog.Group("", slog.String("a", "1"))).Info("m", "b", 2)
+
+	attrs := recordAttrs(t, rec.Records()[0])
+	if len(attrs) != 2 || attrs[0].Key != "a" || attrs[0].Value.String() != "1" ||
+		attrs[1].Key != "b" || attrs[1].Value.String() != "2" {
+		t.Errorf("attrs = %v, want inlined [a=1 b=2]", attrs)
+	}
+}
+
+func TestEmptyGroupElisionPreservesEarlierAttrs(t *testing.T) {
+	t.Parallel()
+	// An elided empty group must not swallow attrs inherited BEFORE it:
+	// logger.With(a).WithGroup(g) logging a bare message renders a=1 and no
+	// group on a stdlib handler, so the capture must too. Guards the backward
+	// materialization loop in derived.Handle: eliding g skips only that op,
+	// never the remaining derivation steps.
+	logger, rec := New()
+	logger.With("a", 1).WithGroup("g").Info("bare")
+
+	records := rec.Records()
+	if len(records) != 1 {
+		t.Fatalf("Len = %d, want 1", len(records))
+	}
+	attrs := recordAttrs(t, records[0])
+	if len(attrs) != 1 || attrs[0].Key != "a" || attrs[0].Value.String() != "1" {
+		t.Errorf("attrs = %v, want [a=1] (an elided empty group must not swallow earlier inherited attrs)", attrs)
 	}
 }

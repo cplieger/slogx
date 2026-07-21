@@ -9,7 +9,7 @@ letting it grow into a logging framework.
 `slogx` is a standard-library-only package (no runtime or test dependencies)
 that configures `log/slog` the standard way. It composes the stdlib `Text`/`JSON`
 handlers; it does not implement its own `slog.Handler`, wrap `slog.Logger`, or
-introduce leveled-logger types. The whole surface is four ideas:
+introduce leveled-logger types. The whole surface is five ideas:
 
 - **`Setup` / `NewHandler`** — build the standard handler (text or JSON, UTC
   timestamps, leveled by a `*slog.LevelVar`); `Setup` also installs it as the
@@ -21,6 +21,9 @@ introduce leveled-logger types. The whole surface is four ideas:
 - **`ParseLevel`** — the `LOG_LEVEL` superset parser (adds the `warning` alias,
   keeps slog's offset syntax, reports recognized-or-not so the caller warns
   _after_ the handler is installed).
+- **`ParseFormat`** — the log-format parser (`text` or `json`) with the same
+  trim, case-folding, empty-default, and recognized-or-not contract as
+  `ParseLevel`.
 - **`UTCTime`** — the exported ReplaceAttr, so a consumer building its own
   handler options can still get UTC timestamps.
 

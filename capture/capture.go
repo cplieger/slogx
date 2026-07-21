@@ -10,6 +10,13 @@
 // share the recorder's buffer and materialize their inherited context into
 // each stored record, so Records reflects what production output would
 // contain. Use Records for anything the convenience methods do not cover.
+//
+// Captured records are render-faithful: they hold what a stdlib TextHandler
+// or JSONHandler would emit, not the verbatim call-site input. At ingestion
+// the recorder applies the attribute output rules of the slog.Handler
+// contract — values are resolved (slog.LogValuer), a zero Attr is dropped, a
+// group with no attrs is dropped, and an empty-keyed group has its attrs
+// inlined into its parent.
 package capture
 
 import (
@@ -32,7 +39,7 @@ type Recorder struct {
 	mu      sync.Mutex
 }
 
-// New returns a Recorder and an *slog.Logger that writes to it, for code that
+// New returns an *slog.Logger and the Recorder that captures its output, for code that
 // takes an injected logger. It does not touch the global default logger, so a
 // test using it may run in parallel.
 func New() (*slog.Logger, *Recorder) {
@@ -56,12 +63,15 @@ func Default(tb testing.TB) *Recorder {
 // Enabled reports true for every level so nothing is filtered before capture.
 func (rec *Recorder) Enabled(context.Context, slog.Level) bool { return true }
 
-// Handle records a clone of r. It satisfies slog.Handler.
+// Handle records r as a stdlib handler would emit it: attribute values are
+// resolved and degenerate attrs are dropped or inlined per the slog.Handler
+// contract (see normalizeAttrs). Time, Level, Message, and PC are stored
+// unchanged. It satisfies slog.Handler.
 //
 //nolint:gocritic // Handle's signature is fixed by the slog.Handler interface; r cannot be a pointer.
 func (rec *Recorder) Handle(_ context.Context, r slog.Record) error {
-	clone := r.Clone()
-	rec.append(&clone)
+	nr := materialize(&r)
+	rec.append(&nr)
 	return nil
 }
 
@@ -75,8 +85,11 @@ func (rec *Recorder) append(r *slog.Record) {
 
 // WithAttrs returns a handler that records through this Recorder with attrs
 // prepended to every captured record, exactly as a real handler would include
-// them. An empty attrs slice returns the receiver.
+// them. Like the stdlib handlers, it normalizes attrs at derivation time (see
+// normalizeAttrs); a slice that is empty or normalizes to empty returns the
+// receiver.
 func (rec *Recorder) WithAttrs(attrs []slog.Attr) slog.Handler {
+	attrs = normalizeAttrs(attrs)
 	if len(attrs) == 0 {
 		return rec
 	}
@@ -114,15 +127,14 @@ func (d *derived) Enabled(context.Context, slog.Level) bool { return true }
 // Handle materializes the derivation prefix into the record — inherited
 // attributes at their nesting depth, later attributes and the record's own
 // under every group opened before them — and stores the result, so the
-// captured record matches what a real handler would emit.
+// captured record matches what a real handler would emit. The record's own
+// attrs are normalized first (see normalizeAttrs), so an enclosing group
+// whose content normalizes to nothing is elided like the stdlib handlers
+// elide it.
 //
 //nolint:gocritic // Handle's signature is fixed by the slog.Handler interface; r cannot be a pointer.
 func (d *derived) Handle(_ context.Context, r slog.Record) error {
-	attrs := make([]slog.Attr, 0, r.NumAttrs())
-	r.Attrs(func(a slog.Attr) bool {
-		attrs = append(attrs, a)
-		return true
-	})
+	attrs := normalizedRecordAttrs(&r)
 	for _, o := range slices.Backward(d.ops) {
 		switch {
 		case o.group != "":
@@ -140,9 +152,11 @@ func (d *derived) Handle(_ context.Context, r slog.Record) error {
 	return nil
 }
 
-// WithAttrs returns a new handle extending the derivation with attrs. An empty
-// attrs slice returns the receiver.
+// WithAttrs returns a new handle extending the derivation with attrs,
+// normalized at derivation time exactly as Recorder.WithAttrs normalizes
+// them. A slice that is empty or normalizes to empty returns the receiver.
 func (d *derived) WithAttrs(attrs []slog.Attr) slog.Handler {
+	attrs = normalizeAttrs(attrs)
 	if len(attrs) == 0 {
 		return d
 	}
@@ -167,12 +181,79 @@ func appendOp(ops []op, next op) []op {
 	return out
 }
 
-// Records returns a snapshot copy of the captured records, in order. Mutating
+// normalizedRecordAttrs collects r's attributes and passes them through
+// normalizeAttrs, yielding the attr list a stdlib handler would render for r.
+func normalizedRecordAttrs(r *slog.Record) []slog.Attr {
+	attrs := make([]slog.Attr, 0, r.NumAttrs())
+	r.Attrs(func(a slog.Attr) bool {
+		attrs = append(attrs, a)
+		return true
+	})
+	return normalizeAttrs(attrs)
+}
+
+// normalizeAttrs applies the attribute output rules of the slog.Handler
+// contract, returning the attrs a stdlib handler would render:
+//
+//   - every value is resolved first (slog.LogValuer chains; Value.Resolve is
+//     loop-capped);
+//   - a group's attrs are normalized recursively, and a group left with no
+//     attrs is dropped — emptiness is judged after inner normalization, so a
+//     group holding only degenerate attrs drops too;
+//   - an empty-keyed group has its normalized attrs inlined into its parent;
+//   - a zero Attr (key and value both zero) is dropped.
+//
+// Group values are rebuilt via slog.GroupValue on freshly allocated slices,
+// so normalized output never aliases caller-owned storage: content is fixed
+// at ingestion time the way a real handler's rendered output is.
+func normalizeAttrs(attrs []slog.Attr) []slog.Attr {
+	out := make([]slog.Attr, 0, len(attrs))
+	for _, a := range attrs {
+		a.Value = a.Value.Resolve()
+		if a.Value.Kind() == slog.KindGroup {
+			children := normalizeAttrs(a.Value.Group())
+			switch {
+			case len(children) == 0: // a group with no attrs is ignored
+			case a.Key == "": // an empty-keyed group inlines its attrs
+				out = append(out, children...)
+			default:
+				out = append(out, slog.Attr{Key: a.Key, Value: slog.GroupValue(children...)})
+			}
+			continue
+		}
+		if a.Equal(slog.Attr{}) {
+			continue // a zero Attr is ignored
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+// materialize returns a copy of r rebuilt through normalizedRecordAttrs, so
+// every group value sits on freshly allocated backing storage. Handle uses it
+// to fix content at ingestion; Records reuses it for snapshot isolation,
+// which is sound because normalizeAttrs is idempotent on already-normalized
+// attrs (values are already resolved, degenerate attrs already dropped) and
+// always rebuilds group values on fresh slices.
+func materialize(r *slog.Record) slog.Record {
+	nr := slog.NewRecord(r.Time, r.Level, r.Message, r.PC)
+	nr.AddAttrs(normalizedRecordAttrs(r)...)
+	return nr
+}
+
+// Records returns a snapshot copy of the captured records, in order. Each
+// record is rebuilt through materialize so its group values get fresh backing
+// storage (slog.Record.Clone does not recursively copy KindGroup values,
+// whose Group() result aliases the stored record's mutable slice); mutating
 // or extending the result does not affect later captures.
 func (rec *Recorder) Records() []slog.Record {
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
-	return slices.Clone(rec.records)
+	records := make([]slog.Record, len(rec.records))
+	for i := range rec.records {
+		records[i] = materialize(&rec.records[i])
+	}
+	return records
 }
 
 // Len returns the number of captured records.
@@ -200,11 +281,17 @@ func (rec *Recorder) Contains(sub string) bool {
 
 // Count returns how many captured records have a Message containing sub.
 func (rec *Recorder) Count(sub string) int {
+	return rec.countMessages(func(msg string) bool { return strings.Contains(msg, sub) })
+}
+
+// countMessages returns how many captured records have a Message matching
+// the given predicate. It is the shared scan behind Count and CountExact.
+func (rec *Recorder) countMessages(match func(string) bool) int {
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
 	n := 0
 	for i := range rec.records {
-		if strings.Contains(rec.records[i].Message, sub) {
+		if match(rec.records[i].Message) {
 			n++
 		}
 	}
@@ -218,13 +305,5 @@ func (rec *Recorder) Count(sub string) int {
 // matches Count("cycle complete")), silently passing a test the contract
 // should fail.
 func (rec *Recorder) CountExact(msg string) int {
-	rec.mu.Lock()
-	defer rec.mu.Unlock()
-	n := 0
-	for i := range rec.records {
-		if rec.records[i].Message == msg {
-			n++
-		}
-	}
-	return n
+	return rec.countMessages(func(m string) bool { return m == msg })
 }

@@ -2,11 +2,13 @@ package slogx
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"log/slog"
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNewHandlerTextToBuffer(t *testing.T) {
@@ -36,15 +38,18 @@ func TestNewHandlerJSONToBuffer(t *testing.T) {
 
 func TestNewHandlerUTCNormalizesTime(t *testing.T) {
 	t.Parallel()
-	// UTCTime is wired, so the emitted timestamp is UTC — RFC3339 renders that
-	// with a trailing Z even when the host TZ has a non-zero offset (a missing
-	// UTCTime on such a host would render a +hh:mm offset instead).
 	var buf bytes.Buffer
 	handler, _ := NewHandler(Options{Output: &buf})
-	slog.New(handler).Info("hi")
+	zone := time.FixedZone("plusfive", 5*60*60)
+	record := slog.NewRecord(time.Date(2026, 7, 10, 12, 0, 0, 0, zone), slog.LevelInfo, "hi", 0)
+
+	if err := handler.Handle(context.Background(), record); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
 	timeField, _, _ := strings.Cut(buf.String(), " ")
-	if !strings.HasPrefix(timeField, "time=") || !strings.HasSuffix(timeField, "Z") {
-		t.Errorf("time field %q is not a UTC (…Z) timestamp", timeField)
+	if timeField != "time=2026-07-10T07:00:00.000Z" {
+		t.Errorf("time field = %q, want UTC-normalized %q", timeField, "time=2026-07-10T07:00:00.000Z")
 	}
 }
 
@@ -113,6 +118,26 @@ func TestSetupInstallsDefault(t *testing.T) {
 	}
 }
 
+func TestSetupLevelVarControlsInstalledLogger(t *testing.T) {
+	// Not parallel: mutates the global slog default. Restore it afterward.
+	old := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(old) })
+
+	var buf bytes.Buffer
+	lv := Setup(Options{Output: &buf})
+
+	slog.Debug("suppressed")
+	if buf.Len() != 0 {
+		t.Fatalf("Debug emitted at the Info default: %q", buf.String())
+	}
+
+	lv.Set(slog.LevelDebug)
+	slog.Debug("now-visible")
+	if !strings.Contains(buf.String(), "msg=now-visible") {
+		t.Errorf("the LevelVar Setup returned does not control the installed logger: %q", buf.String())
+	}
+}
+
 func TestNewHandlerNilOutputDefaultsToStderr(t *testing.T) {
 	// Not parallel: temporarily swaps the global os.Stderr.
 	old := os.Stderr
@@ -122,6 +147,7 @@ func TestNewHandlerNilOutputDefaultsToStderr(t *testing.T) {
 	}
 	os.Stderr = w
 	t.Cleanup(func() { os.Stderr = old })
+	t.Cleanup(func() { _ = r.Close() })
 
 	handler, _ := NewHandler(Options{}) // nil Output must default to os.Stderr
 	slog.New(handler).Info("to-stderr")
@@ -129,7 +155,6 @@ func TestNewHandlerNilOutputDefaultsToStderr(t *testing.T) {
 	if err := w.Close(); err != nil {
 		t.Fatalf("close pipe writer: %v", err)
 	}
-	os.Stderr = old
 	out, err := io.ReadAll(r)
 	if err != nil {
 		t.Fatalf("read pipe: %v", err)

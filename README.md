@@ -31,7 +31,8 @@ install, then warn on a bad value (so the warning goes through the new handler):
 lvl, ok := slogx.ParseLevel(os.Getenv("LOG_LEVEL"), slog.LevelInfo)
 slogx.Setup(slogx.Options{Level: lvl})
 if !ok {
-	slog.Warn("invalid LOG_LEVEL, using default", "value", os.Getenv("LOG_LEVEL"), "default", "info")
+	// Field-name-only: a misconfigured env expansion could place a secret here.
+	slog.Warn("invalid LOG_LEVEL, using default", "var", "LOG_LEVEL", "default", "info")
 }
 ```
 
@@ -75,7 +76,7 @@ h := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{ReplaceAttr: slogx.UTCT
 - `NewHandler(Options) (slog.Handler, *slog.LevelVar)` — the same without the `SetDefault`, for composition.
 - `Options{Output, Format, Level, AddSource}` — zero value is a text handler at Info on stderr.
 - `Format` — `Text` (logfmt, default) or `JSON`; any other value is a programmer error and makes `NewHandler`/`Setup` panic (`ParseFormat` only ever produces the two constants).
-- `ParseLevel(raw string, def slog.Level) (slog.Level, bool)` — parse a level string (case-insensitive, `warning` alias, slog offset syntax); `ok=false` on a non-empty unparseable value.
+- `ParseLevel(raw string, def slog.Level) (slog.Level, bool)` — parse a level string (case-insensitive, `warning` alias, slog offset syntax; the alias composes with offsets, so `warning+1` parses like `warn+1`); `ok=false` on a non-empty unparseable value.
 - `ParseFormat(raw string, def Format) (Format, bool)` — parse a format string (`text`/`json`, case-insensitive, trimmed); same contract as `ParseLevel`: empty returns the default with `ok=true`, a non-empty unrecognized value returns the default with `ok=false` so the caller can warn.
 - `UTCTime(groups []string, a slog.Attr) slog.Attr` — the ReplaceAttr that renders timestamps in UTC.
 - `capture` (subpackage `slogx/capture`) — a record-capturing `slog.Handler` for tests; see [Testing](#testing).
@@ -120,7 +121,10 @@ Attributes and groups added via `Logger.With`/`Logger.WithGroup` are captured
 with the same nesting a real handler would emit — a record logged through
 `logger.With("app", "x").WithGroup("req")` carries `app` at the top level and
 later attributes inside the `req` group, so `rec.Records()` reflects what
-production output would contain.
+production output would contain. Captured records are render-faithful:
+attribute values are stored resolved (`slog.LogValuer`), and degenerate attrs
+follow the `slog.Handler` output rules — a zero `slog.Attr` and an empty group
+are dropped, and an empty-keyed group's attrs are inlined into their parent.
 
 ## Unsupported by design
 
