@@ -39,7 +39,7 @@ type Recorder struct {
 	mu      sync.Mutex
 }
 
-// New returns a Recorder and an *slog.Logger that writes to it, for code that
+// New returns an *slog.Logger and the Recorder that captures its output, for code that
 // takes an injected logger. It does not touch the global default logger, so a
 // test using it may run in parallel.
 func New() (*slog.Logger, *Recorder) {
@@ -281,11 +281,17 @@ func (rec *Recorder) Contains(sub string) bool {
 
 // Count returns how many captured records have a Message containing sub.
 func (rec *Recorder) Count(sub string) int {
+	return rec.countMessages(func(msg string) bool { return strings.Contains(msg, sub) })
+}
+
+// countMessages returns how many captured records have a Message matching
+// the given predicate. It is the shared scan behind Count and CountExact.
+func (rec *Recorder) countMessages(match func(string) bool) int {
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
 	n := 0
 	for i := range rec.records {
-		if strings.Contains(rec.records[i].Message, sub) {
+		if match(rec.records[i].Message) {
 			n++
 		}
 	}
@@ -299,13 +305,5 @@ func (rec *Recorder) Count(sub string) int {
 // matches Count("cycle complete")), silently passing a test the contract
 // should fail.
 func (rec *Recorder) CountExact(msg string) int {
-	rec.mu.Lock()
-	defer rec.mu.Unlock()
-	n := 0
-	for i := range rec.records {
-		if rec.records[i].Message == msg {
-			n++
-		}
-	}
-	return n
+	return rec.countMessages(func(m string) bool { return m == msg })
 }

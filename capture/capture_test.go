@@ -640,3 +640,23 @@ func TestEmptyKeyedGroupInlinedAtDerivation(t *testing.T) {
 		t.Errorf("attrs = %v, want inlined [a=1 b=2]", attrs)
 	}
 }
+
+func TestEmptyGroupElisionPreservesEarlierAttrs(t *testing.T) {
+	t.Parallel()
+	// An elided empty group must not swallow attrs inherited BEFORE it:
+	// logger.With(a).WithGroup(g) logging a bare message renders a=1 and no
+	// group on a stdlib handler, so the capture must too. Guards the backward
+	// materialization loop in derived.Handle: eliding g skips only that op,
+	// never the remaining derivation steps.
+	logger, rec := New()
+	logger.With("a", 1).WithGroup("g").Info("bare")
+
+	records := rec.Records()
+	if len(records) != 1 {
+		t.Fatalf("Len = %d, want 1", len(records))
+	}
+	attrs := recordAttrs(t, records[0])
+	if len(attrs) != 1 || attrs[0].Key != "a" || attrs[0].Value.String() != "1" {
+		t.Errorf("attrs = %v, want [a=1] (an elided empty group must not swallow earlier inherited attrs)", attrs)
+	}
+}

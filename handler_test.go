@@ -147,6 +147,7 @@ func TestNewHandlerNilOutputDefaultsToStderr(t *testing.T) {
 	}
 	os.Stderr = w
 	t.Cleanup(func() { os.Stderr = old })
+	t.Cleanup(func() { _ = r.Close() })
 
 	handler, _ := NewHandler(Options{}) // nil Output must default to os.Stderr
 	slog.New(handler).Info("to-stderr")
@@ -154,7 +155,6 @@ func TestNewHandlerNilOutputDefaultsToStderr(t *testing.T) {
 	if err := w.Close(); err != nil {
 		t.Fatalf("close pipe writer: %v", err)
 	}
-	os.Stderr = old
 	out, err := io.ReadAll(r)
 	if err != nil {
 		t.Fatalf("read pipe: %v", err)
