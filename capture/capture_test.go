@@ -660,3 +660,78 @@ func TestEmptyGroupElisionPreservesEarlierAttrs(t *testing.T) {
 		t.Errorf("attrs = %v, want [a=1] (an elided empty group must not swallow earlier inherited attrs)", attrs)
 	}
 }
+
+// TestAttrHelpers covers the attribute-level assertion surface: rendered
+// (kind-agnostic) value matching, the "" wildcards on both scoping
+// parameters, message-substring scoping, first-match ordering for AttrValue,
+// and that WithAttrs-derived attributes are visible (the helpers scan the
+// materialized records, not just per-call attrs).
+func TestAttrHelpers(t *testing.T) {
+	log, rec := New()
+	log.Info("mapping refreshed", "records", 42, "path", "/config/overrides.json")
+	log.Warn("mapping degraded", "stale_reason", "refresh failed", "records", 7)
+	log.With("component", "indexer").Error("upstream failed", "records", 42)
+
+	if v, ok := rec.AttrValue("mapping refreshed", "records"); !ok || v != "42" {
+		t.Errorf(`AttrValue("mapping refreshed", "records") = %q, %v; want "42", true (Int64 renders "42")`, v, ok)
+	}
+	if v, ok := rec.AttrValue("", "records"); !ok || v != "42" {
+		t.Errorf(`AttrValue("", "records") = %q, %v; want the FIRST record's "42", true`, v, ok)
+	}
+	if _, ok := rec.AttrValue("mapping refreshed", "absent"); ok {
+		t.Error(`AttrValue(..., "absent") found a value, want ok=false`)
+	}
+	if _, ok := rec.AttrValue("no such message", "records"); ok {
+		t.Error("AttrValue with an unmatched message scope found a value, want ok=false")
+	}
+
+	if !rec.HasAttr("mapping degraded", "stale_reason", "refresh failed") {
+		t.Error("HasAttr missed a message-scoped exact rendered value")
+	}
+	if rec.HasAttr("mapping degraded", "stale_reason", "refresh") {
+		t.Error("HasAttr matched a substring, want exact rendered equality")
+	}
+	if !rec.HasAttr("", "records", "7") {
+		t.Error(`HasAttr("", "records", "7") missed the unscoped scan`)
+	}
+
+	if !rec.AttrContains("", "stale_reason", "refresh") {
+		t.Error("AttrContains missed a keyed substring")
+	}
+	if !rec.AttrContains("", "", "overrides.json") {
+		t.Error(`AttrContains with key "" (any attribute) missed the value substring`)
+	}
+	if rec.AttrContains("", "", "no-such-substring") {
+		t.Error("AttrContains matched a substring no attribute carries")
+	}
+
+	// WithAttrs-derived attributes are folded into the stored records.
+	if !rec.HasAttr("upstream failed", "component", "indexer") {
+		t.Error("HasAttr missed a WithAttrs-derived attribute")
+	}
+}
+
+// TestCountLevel covers the level-scoped prefix counter: exact level
+// discrimination (the escalation-contract use: one ERROR, zero WARN of the
+// same message), prefix matching, and the "" prefix counting every record at
+// the level.
+func TestCountLevel(t *testing.T) {
+	log, rec := New()
+	log.Warn("library walk shrank; keeping previous snapshot")
+	log.Warn("library walk shrank; keeping previous snapshot")
+	log.Error("library walk shrank repeatedly; inspect the arr")
+	log.Warn("unrelated warning")
+
+	if got := rec.CountLevel(slog.LevelWarn, "library walk shrank"); got != 2 {
+		t.Errorf("CountLevel(Warn, prefix) = %d, want 2", got)
+	}
+	if got := rec.CountLevel(slog.LevelError, "library walk shrank"); got != 1 {
+		t.Errorf("CountLevel(Error, prefix) = %d, want 1", got)
+	}
+	if got := rec.CountLevel(slog.LevelWarn, ""); got != 3 {
+		t.Errorf(`CountLevel(Warn, "") = %d, want every WARN record (3)`, got)
+	}
+	if got := rec.CountLevel(slog.LevelInfo, "library walk shrank"); got != 0 {
+		t.Errorf("CountLevel(Info, prefix) = %d, want 0 (exact level discrimination)", got)
+	}
+}

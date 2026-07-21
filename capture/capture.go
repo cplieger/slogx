@@ -307,3 +307,89 @@ func (rec *Recorder) countMessages(match func(string) bool) int {
 func (rec *Recorder) CountExact(msg string) int {
 	return rec.countMessages(func(m string) bool { return m == msg })
 }
+
+// --- Attribute-level assertions ---
+//
+// The attr helpers below assert on a record's TOP-LEVEL attributes (the same
+// set a handler receives after WithAttrs derivations are folded in); values
+// nested inside groups are out of scope - walk Records() directly for those.
+// Values compare by their RENDERED form (slog.Value.String()), so an
+// assertion is kind-agnostic: an Int64 7 renders "7", a string "7" renders
+// "7", and a test pinning a logged count does not care which the code chose.
+// The empty string is a wildcard for both scoping parameters: msgSub ""
+// matches every record, key "" matches every attribute.
+
+// AttrValue returns the rendered value of the first top-level attribute
+// named key on a captured record whose Message contains msgSub, in capture
+// order, and whether one was found.
+func (rec *Recorder) AttrValue(msgSub, key string) (string, bool) {
+	var value string
+	found := rec.scanAttrs(msgSub, key, func(v string) bool {
+		value = v
+		return true
+	})
+	return value, found
+}
+
+// HasAttr reports whether any captured record whose Message contains msgSub
+// carries a top-level attribute named key whose rendered value equals
+// rendered.
+func (rec *Recorder) HasAttr(msgSub, key, rendered string) bool {
+	return rec.scanAttrs(msgSub, key, func(v string) bool { return v == rendered })
+}
+
+// AttrContains reports whether any captured record whose Message contains
+// msgSub carries a top-level attribute named key whose rendered value
+// contains sub.
+func (rec *Recorder) AttrContains(msgSub, key, sub string) bool {
+	return rec.scanAttrs(msgSub, key, func(v string) bool { return strings.Contains(v, sub) })
+}
+
+// CountLevel returns how many captured records at exactly level have a
+// Message beginning with msgPrefix ("" counts every record at that level).
+// It exists for level-escalation contracts - a WARN log site that flips to
+// ERROR past a threshold - where the assertion is precisely "one ERROR and
+// zero WARN of this message", which the level-blind Count family cannot
+// express.
+func (rec *Recorder) CountLevel(level slog.Level, msgPrefix string) int {
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	n := 0
+	for i := range rec.records {
+		if rec.records[i].Level == level && strings.HasPrefix(rec.records[i].Message, msgPrefix) {
+			n++
+		}
+	}
+	return n
+}
+
+// scanAttrs is the shared walk behind the attr helpers: it visits captured
+// records in order (materialized, so WithAttrs derivations are folded in and
+// degenerate attrs dropped), scopes by Message-contains-msgSub and
+// attr-key-equals-key (either "" = wildcard), and reports whether match
+// accepted any rendered value. A true from match stops the scan.
+func (rec *Recorder) scanAttrs(msgSub, key string, match func(rendered string) bool) bool {
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	for i := range rec.records {
+		if msgSub != "" && !strings.Contains(rec.records[i].Message, msgSub) {
+			continue
+		}
+		r := materialize(&rec.records[i])
+		found := false
+		r.Attrs(func(a slog.Attr) bool {
+			if key != "" && a.Key != key {
+				return true
+			}
+			if match(a.Value.String()) {
+				found = true
+				return false
+			}
+			return true
+		})
+		if found {
+			return true
+		}
+	}
+	return false
+}
