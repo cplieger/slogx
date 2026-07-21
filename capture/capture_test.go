@@ -711,10 +711,10 @@ func TestAttrHelpers(t *testing.T) {
 	}
 }
 
-// TestCountLevel covers the level-scoped prefix counter: exact level
-// discrimination (the escalation-contract use: one ERROR, zero WARN of the
-// same message), prefix matching, and the "" prefix counting every record at
-// the level.
+// TestCountLevel covers the level-scoped counter: exact level discrimination
+// (the escalation-contract use: one ERROR, zero WARN of the same message),
+// substring matching (the same vocabulary as Count and the attr helpers),
+// and the "" wildcard counting every record at the level.
 func TestCountLevel(t *testing.T) {
 	log, rec := New()
 	log.Warn("library walk shrank; keeping previous snapshot")
@@ -723,15 +723,38 @@ func TestCountLevel(t *testing.T) {
 	log.Warn("unrelated warning")
 
 	if got := rec.CountLevel(slog.LevelWarn, "library walk shrank"); got != 2 {
-		t.Errorf("CountLevel(Warn, prefix) = %d, want 2", got)
+		t.Errorf("CountLevel(Warn, sub) = %d, want 2", got)
 	}
 	if got := rec.CountLevel(slog.LevelError, "library walk shrank"); got != 1 {
-		t.Errorf("CountLevel(Error, prefix) = %d, want 1", got)
+		t.Errorf("CountLevel(Error, sub) = %d, want 1", got)
+	}
+	if got := rec.CountLevel(slog.LevelWarn, "keeping previous"); got != 2 {
+		t.Errorf("CountLevel(Warn, mid-message sub) = %d, want 2 (substring, not prefix)", got)
 	}
 	if got := rec.CountLevel(slog.LevelWarn, ""); got != 3 {
 		t.Errorf(`CountLevel(Warn, "") = %d, want every WARN record (3)`, got)
 	}
 	if got := rec.CountLevel(slog.LevelInfo, "library walk shrank"); got != 0 {
-		t.Errorf("CountLevel(Info, prefix) = %d, want 0 (exact level discrimination)", got)
+		t.Errorf("CountLevel(Info, sub) = %d, want 0 (exact level discrimination)", got)
+	}
+}
+
+// TestRecorderZeroValueReady pins the zero-value contract stated on the type:
+// &Recorder{} is a working handler without going through New or Default (a
+// consumer embeds it directly and hands it to slog.New), so the zero value is
+// part of the compatibility surface, not an accident of implementation.
+func TestRecorderZeroValueReady(t *testing.T) {
+	t.Parallel()
+	rec := &Recorder{}
+	slog.New(rec).With("app", "x").WithGroup("req").Info("hello", "k", "v")
+
+	if rec.Len() != 1 {
+		t.Fatalf("Len() = %d, want 1", rec.Len())
+	}
+	if v, ok := rec.AttrValue("hello", "app"); !ok || v != "x" {
+		t.Errorf(`AttrValue("hello", "app") = %q, %v; want "x", true`, v, ok)
+	}
+	if !rec.HasAttr("hello", "req", "[k=v]") {
+		t.Error(`HasAttr("hello", "req", "[k=v]") = false; want the WithGroup-nested attrs rendered under the group key`)
 	}
 }
