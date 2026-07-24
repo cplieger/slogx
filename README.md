@@ -7,11 +7,11 @@
 
 > Standard structured-logging setup for log/slog
 
-A tiny, standard-library-only helper that installs the one slog handler shape a
-set of containerized Go apps kept hand-rolling: leveled text (logfmt) or JSON,
-UTC-normalized timestamps, and a `*slog.LevelVar` so the level can be set after
-config is read or flipped at runtime. Plus a `LOG_LEVEL` parser that adds the
-long-form `warning` alias slog lacks.
+A tiny, standard-library-only helper that installs one standard slog handler
+shape: leveled text (logfmt) or JSON, UTC-normalized timestamps, and a
+`*slog.LevelVar` so the level can be set after config is read or flipped at
+runtime. Plus a `LOG_LEVEL` parser that adds the long-form `warning` alias slog
+lacks.
 
 It is a thin wrapper around `log/slog`, not a logging framework and not a custom
 handler. Zero dependencies beyond the standard library.
@@ -24,7 +24,7 @@ go get github.com/cplieger/slogx@latest
 
 ## Usage
 
-The common case — parse `LOG_LEVEL` and install the default logger. Parse first,
+The common case: parse `LOG_LEVEL` and install the default logger. Parse first,
 install, then warn on a bad value (so the warning goes through the new handler):
 
 ```go
@@ -44,7 +44,7 @@ slogx.Setup(slogx.Options{Format: slogx.JSON, Output: os.Stdout})
 ```
 
 Install a handler _before_ config is read (so early warnings still emit), then
-set the level once it is known — the returned `*slog.LevelVar` also flips the
+set the level once it is known. The returned `*slog.LevelVar` also flips the
 level at runtime for a debug toggle:
 
 ```go
@@ -72,14 +72,14 @@ h := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{ReplaceAttr: slogx.UTCT
 
 ## API
 
-- `Setup(Options) *slog.LevelVar` — build a handler and install it as `slog`'s default; returns the LevelVar backing its level.
-- `NewHandler(Options) (slog.Handler, *slog.LevelVar)` — the same without the `SetDefault`, for composition.
-- `Options{Output, Format, Level, AddSource}` — zero value is a text handler at Info on stderr.
-- `Format` — `Text` (logfmt, default) or `JSON`; any other value is a programmer error and makes `NewHandler`/`Setup` panic (`ParseFormat` only ever produces the two constants).
-- `ParseLevel(raw string, def slog.Level) (slog.Level, bool)` — parse a level string (case-insensitive, `warning` alias, slog offset syntax; the alias composes with offsets, so `warning+1` parses like `warn+1`); `ok=false` on a non-empty unparseable value.
-- `ParseFormat(raw string, def Format) (Format, bool)` — parse a format string (`text`/`json`, case-insensitive, trimmed); same contract as `ParseLevel`: empty returns the default with `ok=true`, a non-empty unrecognized value returns the default with `ok=false` so the caller can warn.
-- `UTCTime(groups []string, a slog.Attr) slog.Attr` — the ReplaceAttr that renders timestamps in UTC.
-- `capture` (subpackage `slogx/capture`) — a record-capturing `slog.Handler` for tests; see [Testing](#testing).
+- `Setup(Options) *slog.LevelVar`: build a handler and install it as `slog`'s default; returns the LevelVar backing its level.
+- `NewHandler(Options) (slog.Handler, *slog.LevelVar)`: the same without the `SetDefault`, for composition.
+- `Options{Output, Format, Level, AddSource}`: zero value is a text handler at Info on stderr.
+- `Format`: `Text` (logfmt, default) or `JSON`; any other value is a programmer error and makes `NewHandler`/`Setup` panic (`ParseFormat` only ever produces the two constants).
+- `ParseLevel(raw string, def slog.Level) (slog.Level, bool)`: parse a level string (case-insensitive, `warning` alias, slog offset syntax; the alias composes with offsets, so `warning+1` parses like `warn+1`); `ok=false` on a non-empty unparseable value.
+- `ParseFormat(raw string, def Format) (Format, bool)`: parse a format string (`text`/`json`, case-insensitive, trimmed); same contract as `ParseLevel`: empty returns the default with `ok=true`, a non-empty unrecognized value returns the default with `ok=false` so the caller can warn.
+- `UTCTime(groups []string, a slog.Attr) slog.Attr`: the ReplaceAttr that renders timestamps in UTC.
+- `capture` (subpackage `slogx/capture`): a record-capturing `slog.Handler` for tests; see [Testing](#testing).
 
 ## Testing
 
@@ -122,26 +122,24 @@ Attribute-level assertions cover a record's top-level attributes, with
 the first match's rendered value, `HasAttr(msgSub, key, rendered)` pins an
 exact rendered value, and `AttrContains(msgSub, key, sub)` matches the value
 by substring. Values compare by their rendered form (`slog.Value.String()`),
-so an `Int64` 7 and a string `"7"` both satisfy `"7"` — kind-agnostic on
-purpose. The empty string is a wildcard for both scoping parameters (`msgSub`
-`""` matches every record, `key` `""` matches every attribute); values nested
-inside groups are out of scope — walk `Records()` for those.
+so an `Int64` 7 and a string `"7"` both satisfy `"7"`; the comparison is
+kind-agnostic on purpose. The empty string is a wildcard for both scoping
+parameters (`msgSub` `""` matches every record, `key` `""` matches every
+attribute); values nested inside groups are out of scope, so walk `Records()`
+for those.
 
 `capture` is a separate package so its `testing` import and record buffer never
 reach production consumers of `slogx`; import it only from `_test.go` files.
-Attributes and groups added via `Logger.With`/`Logger.WithGroup` are captured
-with the same nesting a real handler would emit — a record logged through
-`logger.With("app", "x").WithGroup("req")` carries `app` at the top level and
-later attributes inside the `req` group, so `rec.Records()` reflects what
-production output would contain. Captured records are render-faithful:
-attribute values are stored resolved (`slog.LogValuer`), and degenerate attrs
-follow the `slog.Handler` output rules — a zero `slog.Attr` and an empty group
-are dropped, and an empty-keyed group's attrs are inlined into their parent.
+Captured records are render-faithful: `Logger.With`/`Logger.WithGroup` nesting
+is folded into each stored record, attribute values are stored resolved
+(`slog.LogValuer`), and degenerate attrs follow the standard `slog.Handler`
+output rules, so `rec.Records()` matches what a real handler would emit.
 
-## Unsupported by design
+## Unsupported by Design
 
-These are deliberate non-goals, not a TODO list. The library is one cohesive
-concept — install the standard slog handler — and stays small on purpose.
+These are deliberate non-goals, not a TODO list. The library covers one
+cohesive concept, installing the standard slog handler, and stays small on
+purpose.
 
 | Feature | Rationale |
 | --- | --- |
@@ -151,6 +149,11 @@ concept — install the standard slog handler — and stays small on purpose.
 | `LOG_LEVEL` (or any) env-var _names_ | `ParseLevel` takes a string; the app owns which environment variable it comes from and its default. |
 | Per-app attribute conventions | Base attributes (`slog.With("service", …)`), key naming, and message wording are the app's editorial choices. Call `.With` on the logger `Setup` installs. |
 | A logging facade / leveled wrapper types | `slog` is the interface. `slogx` configures it and gets out of the way; it does not wrap `slog.Logger` in another type. |
+
+## Contributing
+
+Issues and PRs are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the
+conventions and how to run the checks locally.
 
 ## Disclaimer
 
@@ -165,4 +168,4 @@ supervises implementation, and makes all final decisions.
 
 ## License
 
-GPL-3.0 — see [LICENSE](LICENSE).
+GPL-3.0. See [LICENSE](LICENSE).
