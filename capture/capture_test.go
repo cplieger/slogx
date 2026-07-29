@@ -711,6 +711,119 @@ func TestAttrHelpers(t *testing.T) {
 	}
 }
 
+// TestAttrReturnsTypedValues covers the contract Attr exists for and the
+// rendered helpers cannot express: that a value was logged as a particular
+// slog.Kind. The two attrs below render IDENTICALLY, so AttrValue cannot tell
+// them apart; the test asserts that fact first, so a future change that made
+// them render differently would surface here rather than quietly removing
+// Attr's reason to exist.
+func TestAttrReturnsTypedValues(t *testing.T) {
+	t.Parallel()
+	ts := time.Date(2026, 7, 29, 14, 7, 0, 0, time.UTC)
+	log, rec := New()
+	log.Info("typed", "at", ts)
+	log.Info("stringly", "at", ts.String())
+
+	typed, ok := rec.Attr("typed", "at")
+	if !ok {
+		t.Fatal(`Attr("typed", "at") found nothing, want the Time value`)
+	}
+	stringly, ok := rec.Attr("stringly", "at")
+	if !ok {
+		t.Fatal(`Attr("stringly", "at") found nothing, want the String value`)
+	}
+
+	if typed.String() != stringly.String() {
+		t.Fatalf("the two attrs render differently (%q vs %q); Attr's premise is that a rendered comparison cannot separate them", typed.String(), stringly.String())
+	}
+	if typed.Kind() != slog.KindTime {
+		t.Errorf("Attr(...).Kind() = %v, want %v for slog.Time", typed.Kind(), slog.KindTime)
+	}
+	if stringly.Kind() != slog.KindString {
+		t.Errorf("Attr(...).Kind() = %v, want %v for a pre-rendered string", stringly.Kind(), slog.KindString)
+	}
+	if !typed.Time().Equal(ts) {
+		t.Errorf("Attr(...).Time() = %v, want %v", typed.Time(), ts)
+	}
+
+	// Scoping and the not-found result come from the shared walk; pin that Attr
+	// is wired into it rather than re-testing the walk itself.
+	if _, ok := rec.Attr("typed", "absent"); ok {
+		t.Error(`Attr(..., "absent") found a value, want ok=false`)
+	}
+	if v, ok := rec.Attr("no such message", "at"); ok || !v.Equal(slog.Value{}) {
+		t.Errorf("Attr with an unmatched message scope = %v, %v; want the zero Value, false", v, ok)
+	}
+	if v, ok := rec.Attr("", "at"); !ok || v.Kind() != slog.KindTime {
+		t.Errorf(`Attr("", "at") = %v (%v), %v; want the FIRST record's Time value`, v, v.Kind(), ok)
+	}
+}
+
+// TestAttrGroupValuesAreIsolated is the Records()-snapshot isolation contract
+// for the one value Attr lets escape the lock. A KindGroup value carries a
+// []Attr that aliases the stored record, so returning it raw would let a
+// caller mutate the recorder's own buffer.
+func TestAttrGroupValuesAreIsolated(t *testing.T) {
+	t.Parallel()
+	logger, rec := New()
+	logger.Info("m", slog.Group("g", slog.String("k", "before")))
+
+	got, ok := rec.Attr("m", "g")
+	if !ok {
+		t.Fatal(`Attr("m", "g") found nothing, want the group value`)
+	}
+	got.Group()[0] = slog.String("k", "mutated")
+
+	again, _ := rec.Attr("m", "g")
+	if grp := again.Group(); len(grp) != 1 || grp[0].Value.String() != "before" {
+		t.Errorf("second Attr group = %v, want [k=before] (a mutation through the returned value leaked into the recorder)", grp)
+	}
+}
+
+// TestAttrNestedGroupValuesAreIsolated pins that the detach is RECURSIVE. A
+// shallow one-level copy passes the flat-group test above while still aliasing
+// the inner slice.
+func TestAttrNestedGroupValuesAreIsolated(t *testing.T) {
+	t.Parallel()
+	logger, rec := New()
+	logger.Info("m", slog.Group("outer", slog.Group("inner", slog.String("k", "before"))))
+
+	got, ok := rec.Attr("m", "outer")
+	if !ok {
+		t.Fatal(`Attr("m", "outer") found nothing, want the group value`)
+	}
+	got.Group()[0].Value.Group()[0] = slog.String("k", "mutated")
+
+	again, _ := rec.Attr("m", "outer")
+	if grp := again.Group()[0].Value.Group(); len(grp) != 1 || grp[0].Value.String() != "before" {
+		t.Errorf("second Attr nested group = %v, want [k=before] (a nested mutation leaked into the recorder)", grp)
+	}
+}
+
+// TestAttrValueRendersAttr pins that the rendered helper is derived from the
+// typed one, so the two can never disagree about what exists or what it says.
+func TestAttrValueRendersAttr(t *testing.T) {
+	t.Parallel()
+	log, rec := New()
+	log.Info("m", "count", 42, "when", time.Date(2026, 7, 29, 14, 7, 0, 0, time.UTC))
+	log.Info("m", slog.Group("g", slog.String("k", "v")))
+
+	for _, key := range []string{"count", "when", "g", "absent"} {
+		typed, tok := rec.Attr("m", key)
+		rendered, rok := rec.AttrValue("m", key)
+		if tok != rok {
+			t.Errorf("Attr(%q) ok=%v but AttrValue(%q) ok=%v; the two must agree on existence", key, tok, key, rok)
+			continue
+		}
+		if want := typed.String(); tok && rendered != want {
+			t.Errorf("AttrValue(%q) = %q, want %q (Attr's rendered form)", key, rendered, want)
+		}
+		if !tok && rendered != "" {
+			t.Errorf("AttrValue(%q) = %q on a miss, want the empty string", key, rendered)
+		}
+	}
+}
+
 // TestCountLevel covers the level-scoped counter: exact level discrimination
 // (the escalation-contract use: one ERROR, zero WARN of the same message),
 // substring matching (the same vocabulary as Count and the attr helpers),
