@@ -319,17 +319,52 @@ func (rec *Recorder) CountExact(msg string) int {
 // "7", and a test pinning a logged count does not care which the code chose.
 // The empty string is a wildcard for both scoping parameters: msgSub ""
 // matches every record, key "" matches every attribute.
+//
+// Attr is the one TYPED member of the family, for the assertion the rendered
+// helpers cannot make: that a value is of a particular slog.Kind. Reach for it
+// when the kind is the contract and for nothing else — a test that only needs
+// the text is clearer through AttrValue, and one that needs a whole record's
+// shape (its level, its complete key set, several values at once) still wants a
+// Records() walk.
+
+// Attr returns the typed value of the first top-level attribute named key on
+// a captured record whose Message contains msgSub, in capture order, and
+// whether one was found. It is the primitive behind AttrValue, which renders
+// this result.
+//
+// It exists for the contract a rendered comparison cannot express: that a
+// value was logged as a particular KIND. slog.Time("at", t) and
+// slog.String("at", t.String()) render identically, so AttrValue cannot tell
+// a caller which one the code chose, and a JSON handler renders them very
+// differently downstream. An assertion on Kind() pins that choice; one on the
+// rendered text does not.
+//
+// A KindGroup value is detached from the recorder's storage before it is
+// returned (its attrs are rebuilt on fresh slices, recursively), so holding
+// the result across later captures is safe — the same isolation Records()
+// gives. Values are already resolved at ingestion, so the result is never
+// KindLogValuer. One boundary is inherited rather than closed: a KindAny
+// payload is the caller's own object and is returned as-is, exactly as
+// Records() leaves it, so mutating that object still changes what a later
+// read observes.
+func (rec *Recorder) Attr(msgSub, key string) (slog.Value, bool) {
+	var value slog.Value
+	found := rec.scanAttrValues(msgSub, key, func(v slog.Value) bool {
+		value = detachValue(v)
+		return true
+	})
+	return value, found
+}
 
 // AttrValue returns the rendered value of the first top-level attribute
 // named key on a captured record whose Message contains msgSub, in capture
 // order, and whether one was found.
 func (rec *Recorder) AttrValue(msgSub, key string) (string, bool) {
-	var value string
-	found := rec.scanAttrs(msgSub, key, func(v string) bool {
-		value = v
-		return true
-	})
-	return value, found
+	v, ok := rec.Attr(msgSub, key)
+	if !ok {
+		return "", false
+	}
+	return v.String(), true
 }
 
 // HasAttr reports whether any captured record whose Message contains msgSub
@@ -365,15 +400,23 @@ func (rec *Recorder) CountLevel(level slog.Level, msgSub string) int {
 	return n
 }
 
-// scanAttrs is the shared walk behind the attr helpers: it visits captured
-// records in order, scopes by Message-contains-msgSub and attr-key-equals-key
-// (either "" = wildcard), and reports whether match accepted any rendered
-// value. A true from match stops the scan. Records are stored materialized
-// (Handle folds derivations in and drops degenerate attrs at ingestion), so
-// the scan reads them in place; only rendered strings leave the lock, never
-// a reference into the buffer, which is why it needs no Records()-style
-// defensive copy.
+// scanAttrs is the rendered-form adapter over scanAttrValues, behind HasAttr
+// and AttrContains: it renders each visited value so those helpers stay
+// kind-agnostic.
 func (rec *Recorder) scanAttrs(msgSub, key string, match func(rendered string) bool) bool {
+	return rec.scanAttrValues(msgSub, key, func(v slog.Value) bool { return match(v.String()) })
+}
+
+// scanAttrValues is the shared walk behind the attr helpers: it visits
+// captured records in order, scopes by Message-contains-msgSub and
+// attr-key-equals-key (either "" = wildcard), and reports whether match
+// accepted any value. A true from match stops the scan. Records are stored
+// materialized (Handle folds derivations in, resolves every value and drops
+// degenerate attrs at ingestion), so the scan reads them in place under the
+// lock. It hands match a value that may still alias the record buffer, which
+// is why a caller that LETS one escape — Attr, the only one — detaches it
+// first; the rendered helpers derive a string and keep nothing.
+func (rec *Recorder) scanAttrValues(msgSub, key string, match func(slog.Value) bool) bool {
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
 	for i := range rec.records {
@@ -385,7 +428,7 @@ func (rec *Recorder) scanAttrs(msgSub, key string, match func(rendered string) b
 			if key != "" && a.Key != key {
 				return true
 			}
-			if match(a.Value.String()) {
+			if match(a.Value) {
 				found = true
 				return false
 			}
@@ -396,4 +439,18 @@ func (rec *Recorder) scanAttrs(msgSub, key string, match func(rendered string) b
 		}
 	}
 	return false
+}
+
+// detachValue returns v with any group content rebuilt on freshly allocated
+// backing storage, so a value handed out of the lock never aliases a stored
+// record. Only KindGroup needs it: slog.Value is otherwise a value type over
+// immutable content, and Records() documents the same reason for rebuilding
+// groups rather than relying on slog.Record.Clone. normalizeAttrs is the
+// shared rebuild — idempotent on already-normalized attrs, and recursive, so a
+// group nested in a group is detached at every level.
+func detachValue(v slog.Value) slog.Value {
+	if v.Kind() != slog.KindGroup {
+		return v
+	}
+	return slog.GroupValue(normalizeAttrs(v.Group())...)
 }

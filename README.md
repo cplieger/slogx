@@ -129,6 +129,17 @@ parameters (`msgSub` `""` matches every record, `key` `""` matches every
 attribute); values nested inside groups are out of scope, so walk `Records()`
 for those.
 
+`Attr(msgSub, key)` is the typed member of that family, returning the
+`slog.Value` itself. Use it when the KIND is the contract — `slog.Time("at", t)`
+and `slog.String("at", t.String())` render identically, so no rendered
+comparison can tell a caller which one the code chose, while a JSON handler
+renders them very differently downstream. `AttrValue` is `Attr` rendered, so the
+two can never disagree about what a record carries. A group value is detached
+from the recorder's storage before it is returned, recursively, so holding the
+result across later captures is safe. Prefer `AttrValue` when only the text
+matters, and a `Records()` walk when a whole record's shape is the contract (its
+level, its complete key set, several values at once).
+
 `capture` is a separate package so its `testing` import and record buffer never
 reach production consumers of `slogx`; import it only from `_test.go` files.
 Captured records are render-faithful: `Logger.With`/`Logger.WithGroup` nesting
