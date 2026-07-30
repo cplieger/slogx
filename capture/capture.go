@@ -320,6 +320,12 @@ func (rec *Recorder) CountExact(msg string) int {
 // The empty string is a wildcard for both scoping parameters: msgSub ""
 // matches every record, key "" matches every attribute.
 //
+// The Exact-suffixed members (AttrValueExact, AttrValuesExact) scope the
+// message by equality instead of substring, the same relation CountExact has
+// to Count. There msg is a whole message, so "" is NOT a wildcard: it matches
+// a record whose Message is empty and nothing else. key "" stays a wildcard
+// for them.
+//
 // Attr is the one TYPED member of the family, for the assertion the rendered
 // helpers cannot make: that a value is of a particular slog.Kind. Reach for it
 // when the kind is the contract and for nothing else — a test that only needs
@@ -367,6 +373,53 @@ func (rec *Recorder) AttrValue(msgSub, key string) (string, bool) {
 	return v.String(), true
 }
 
+// AttrValueExact returns the rendered value of the first top-level attribute
+// named key on a captured record whose Message is exactly equal to msg, in
+// capture order, and whether one was found. It is to AttrValue what CountExact
+// is to Count: use it when the message is pinned by an external contract (a
+// Loki alert rule matching the exact msg value), where AttrValue's substring
+// scoping also reads the attribute off a SUPERSTRING message —
+// AttrValue("cycle complete", "files") answers from "cycle completed with
+// errors" if that record was captured first — so the assertion silently
+// inspects a record the contract never named.
+//
+// msg is a whole message, so "" is not the wildcard it is for msgSub: it
+// matches a record whose Message is empty and nothing else, exactly as
+// CountExact("") does. key "" still matches every attribute.
+func (rec *Recorder) AttrValueExact(msg, key string) (string, bool) {
+	var value string
+	found := rec.scanAttrValuesBy(exactMessage(msg), key, func(v slog.Value) bool {
+		value = v.String()
+		return true
+	})
+	return value, found
+}
+
+// AttrValuesExact returns the rendered value of EVERY top-level attribute
+// named key carried by the captured records whose Message is exactly equal to
+// msg, and nil when none matched. Order is capture order across records, and
+// within a record the order a handler would render the attributes in
+// (WithAttrs-derived attributes first, the call site's own after).
+//
+// It is the collector the single-value getters cannot stand in for: an
+// assertion about a REPEATED log site — one record per retry, per pruned file,
+// per polled item — is about the sequence of values, which AttrValueExact
+// (first match only) and HasAttr (any match, order-blind) both flatten. The
+// alternative is a Records() walk that reimplements the scoping, the
+// top-level-only rule and the rendering.
+//
+// Message scoping is equality, as in AttrValueExact: msg "" matches only an
+// empty Message. key "" matches every attribute, so AttrValuesExact(msg, "")
+// renders every top-level value of every record with that message.
+func (rec *Recorder) AttrValuesExact(msg, key string) []string {
+	var values []string
+	rec.scanAttrValuesBy(exactMessage(msg), key, func(v slog.Value) bool {
+		values = append(values, v.String())
+		return false // never accept: the walk runs to the end, collecting every match
+	})
+	return values
+}
+
 // HasAttr reports whether any captured record whose Message contains msgSub
 // carries a top-level attribute named key whose rendered value equals
 // rendered.
@@ -407,20 +460,38 @@ func (rec *Recorder) scanAttrs(msgSub, key string, match func(rendered string) b
 	return rec.scanAttrValues(msgSub, key, func(v slog.Value) bool { return match(v.String()) })
 }
 
-// scanAttrValues is the shared walk behind the attr helpers: it visits
-// captured records in order, scopes by Message-contains-msgSub and
-// attr-key-equals-key (either "" = wildcard), and reports whether match
-// accepted any value. A true from match stops the scan. Records are stored
-// materialized (Handle folds derivations in, resolves every value and drops
-// degenerate attrs at ingestion), so the scan reads them in place under the
-// lock. It hands match a value that may still alias the record buffer, which
-// is why a caller that LETS one escape — Attr, the only one — detaches it
-// first; the rendered helpers derive a string and keep nothing.
+// scanAttrValues is the substring-scoped adapter over scanAttrValuesBy,
+// behind Attr and the rendered helpers: msgSub "" matches every record, any
+// other value matches by substring.
 func (rec *Recorder) scanAttrValues(msgSub, key string, match func(slog.Value) bool) bool {
+	return rec.scanAttrValuesBy(func(m string) bool {
+		return msgSub == "" || strings.Contains(m, msgSub)
+	}, key, match)
+}
+
+// exactMessage returns the message predicate the Exact-suffixed accessors
+// scope by: equality with msg, the same matcher CountExact applies. It is why
+// "" is not a wildcard for them — an empty msg matches an empty Message and
+// nothing else.
+func exactMessage(msg string) func(string) bool {
+	return func(m string) bool { return m == msg }
+}
+
+// scanAttrValuesBy is the shared walk behind every attr helper: it visits
+// captured records in order, scopes by matchMsg on the Message and by
+// attr-key-equals-key (key "" = wildcard), and reports whether match accepted
+// any value. A true from match stops the scan; a collector that wants every
+// match therefore never accepts. Records are stored materialized (Handle folds
+// derivations in, resolves every value and drops degenerate attrs at
+// ingestion), so the scan reads them in place under the lock. It hands match a
+// value that may still alias the record buffer, which is why a caller that
+// LETS one escape — Attr, the only one — detaches it first; the rendered
+// helpers derive a string and keep nothing.
+func (rec *Recorder) scanAttrValuesBy(matchMsg func(string) bool, key string, match func(slog.Value) bool) bool {
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
 	for i := range rec.records {
-		if msgSub != "" && !strings.Contains(rec.records[i].Message, msgSub) {
+		if !matchMsg(rec.records[i].Message) {
 			continue
 		}
 		found := false

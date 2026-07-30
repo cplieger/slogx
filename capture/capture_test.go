@@ -3,6 +3,7 @@ package capture
 import (
 	"context"
 	"log/slog"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -821,6 +822,113 @@ func TestAttrValueRendersAttr(t *testing.T) {
 		if !tok && rendered != "" {
 			t.Errorf("AttrValue(%q) = %q on a miss, want the empty string", key, rendered)
 		}
+	}
+}
+
+// exactMessageRecorder seeds the fixture the exact-message attr accessors are
+// tested against. The SUPERSTRING record is captured FIRST on purpose: it is
+// what the substring helpers answer from, so the exact accessors skipping it
+// is a real discrimination rather than an artifact of capture order. The last
+// record arrives through a derived handle, so the fixture also spans the
+// WithAttrs fold.
+func exactMessageRecorder() *Recorder {
+	log, rec := New()
+	log.Info("cycle completed with errors", "files", 99)
+	log.Info("cycle complete", "files", 3)
+	log.Warn("cycle complete", "files", 7)
+	log.Info("cycle complete", "path", "/tmp/a")
+	log.With("component", "indexer").Info("cycle complete", "files", 11)
+	return rec
+}
+
+// TestAttrValueExact covers the exact-message single-value getter: that it
+// discriminates against a substring superset (the false-pass window it exists
+// to close), that it takes the first match in capture order, and its misses —
+// a partial message, a missing attribute, a missing message, and the empty
+// message that is NOT a wildcard here.
+func TestAttrValueExact(t *testing.T) {
+	t.Parallel()
+	rec := exactMessageRecorder()
+
+	// The premise: the substring getter answers from the superstring record,
+	// captured first, and reports success while doing it.
+	if v, ok := rec.AttrValue("cycle complete", "files"); !ok || v != "99" {
+		t.Fatalf(`AttrValue("cycle complete", "files") = %q, %v; want "99", true (the superstring record is what substring scoping finds first — AttrValueExact's whole reason to exist)`, v, ok)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		msg    string
+		key    string
+		want   string
+		wantOK bool
+	}{
+		{name: "exact_match_beats_substring_superset", msg: "cycle complete", key: "files", want: "3", wantOK: true},
+		{name: "superstring_message_is_reachable_in_its_own_right", msg: "cycle completed with errors", key: "files", want: "99", wantOK: true},
+		{name: "key_wildcard_takes_the_first_attribute", msg: "cycle complete", key: "", want: "3", wantOK: true},
+		{name: "partial_message_matches_nothing", msg: "cycle", key: "files"},
+		{name: "missing_attribute", msg: "cycle complete", key: "absent"},
+		{name: "missing_message", msg: "no such message", key: "files"},
+		{name: "empty_message_is_not_a_wildcard", msg: "", key: "files"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, ok := rec.AttrValueExact(tc.msg, tc.key)
+			if ok != tc.wantOK {
+				t.Errorf("AttrValueExact(%q, %q) ok = %v, want %v", tc.msg, tc.key, ok, tc.wantOK)
+			}
+			if got != tc.want {
+				t.Errorf("AttrValueExact(%q, %q) = %q, want %q", tc.msg, tc.key, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestAttrValuesExact covers the exact-message collector: every matching
+// record's value in capture order (including across a derived handle), the
+// key wildcard collecting a whole record's top-level values, and the misses,
+// which return nil rather than an empty slice.
+func TestAttrValuesExact(t *testing.T) {
+	t.Parallel()
+	rec := exactMessageRecorder()
+
+	for _, tc := range []struct {
+		name string
+		msg  string
+		key  string
+		want []string
+	}{
+		{
+			name: "collects_every_matching_record_in_order",
+			msg:  "cycle complete", key: "files",
+			// 99 belongs to the superstring message and 7 sits on a WARN record:
+			// the collector is level-blind and message-exact, and 11 arrives
+			// through a derived handle, so the fold is included.
+			want: []string{"3", "7", "11"},
+		},
+		{
+			name: "key_wildcard_collects_every_top_level_value",
+			msg:  "cycle complete", key: "",
+			// Derived attrs render before the call site's own, as a handler
+			// would emit them.
+			want: []string{"3", "7", "/tmp/a", "indexer", "11"},
+		},
+		{name: "single_match_still_collects", msg: "cycle completed with errors", key: "files", want: []string{"99"}},
+		{name: "missing_attribute_collects_nothing", msg: "cycle complete", key: "absent"},
+		{name: "missing_message_collects_nothing", msg: "no such message", key: "files"},
+		{name: "partial_message_collects_nothing", msg: "cycle", key: "files"},
+		{name: "empty_message_is_not_a_wildcard", msg: "", key: "files"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := rec.AttrValuesExact(tc.msg, tc.key)
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("AttrValuesExact(%q, %q) = %q, want %q", tc.msg, tc.key, got, tc.want)
+			}
+			if tc.want == nil && got != nil {
+				t.Errorf("AttrValuesExact(%q, %q) = %#v on a miss, want nil", tc.msg, tc.key, got)
+			}
+		})
 	}
 }
 
