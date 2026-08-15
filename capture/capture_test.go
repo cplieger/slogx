@@ -1,7 +1,6 @@
 package capture
 
 import (
-	"context"
 	"log/slog"
 	"slices"
 	"sync"
@@ -117,7 +116,7 @@ func TestStoredRecordsDoNotAliasCallerGroupSlices(t *testing.T) {
 	// slice the caller retained after logging must not change what was captured.
 	logger, rec := New()
 	kids := []slog.Attr{slog.String("k", "before")}
-	logger.LogAttrs(context.Background(), slog.LevelInfo, "m",
+	logger.LogAttrs(t.Context(), slog.LevelInfo, "m",
 		slog.Attr{Key: "g", Value: slog.GroupValue(kids...)})
 
 	kids[0] = slog.String("k", "after")
@@ -150,7 +149,7 @@ func TestDerivedRecordsDoNotAliasCallerGroupSlices(t *testing.T) {
 		derived := logger.With("base", 1)
 		children := []slog.Attr{slog.String("k", "before")}
 
-		derived.LogAttrs(context.Background(), slog.LevelInfo, "m",
+		derived.LogAttrs(t.Context(), slog.LevelInfo, "m",
 			slog.Attr{Key: "g", Value: slog.GroupValue(children...)})
 		children[0] = slog.String("k", "after")
 
@@ -451,7 +450,7 @@ func TestEmptyGroupRecordAttrElidedWithEnclosingGroup(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			logger, rec := New()
-			logger.WithGroup("g").LogAttrs(context.Background(), slog.LevelInfo, "m", tc.attr)
+			logger.WithGroup("g").LogAttrs(t.Context(), slog.LevelInfo, "m", tc.attr)
 
 			records := rec.Records()
 			if len(records) != 1 {
@@ -469,7 +468,7 @@ func TestZeroAttrDropped(t *testing.T) {
 	// "If an Attr's key and value are both the zero value, ignore the Attr" —
 	// a stdlib handler renders nothing for slog.Attr{}; capture must match.
 	logger, rec := New()
-	logger.LogAttrs(context.Background(), slog.LevelInfo, "m", slog.Attr{}, slog.String("k", "v"))
+	logger.LogAttrs(t.Context(), slog.LevelInfo, "m", slog.Attr{}, slog.String("k", "v"))
 
 	attrs := recordAttrs(t, rec.Records()[0])
 	if len(attrs) != 1 || attrs[0].Key != "k" || attrs[0].Value.String() != "v" {

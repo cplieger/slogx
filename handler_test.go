@@ -2,7 +2,6 @@ package slogx
 
 import (
 	"bytes"
-	"context"
 	"io"
 	"log/slog"
 	"os"
@@ -43,7 +42,7 @@ func TestNewHandlerUTCNormalizesTime(t *testing.T) {
 	zone := time.FixedZone("plusfive", 5*60*60)
 	record := slog.NewRecord(time.Date(2026, 7, 10, 12, 0, 0, 0, zone), slog.LevelInfo, "hi", 0)
 
-	if err := handler.Handle(context.Background(), record); err != nil {
+	if err := handler.Handle(t.Context(), record); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
 
