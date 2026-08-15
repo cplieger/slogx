@@ -19,7 +19,6 @@ package capture
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"io"
 	"log/slog"
@@ -112,7 +111,7 @@ func TestRenderFaithfulDifferential(t *testing.T) {
 			l.Error("high level", "k", "v")
 		}},
 		{"zero attr dropped", func(l *slog.Logger) {
-			l.LogAttrs(context.Background(), slog.LevelInfo, "zero",
+			l.LogAttrs(t.Context(), slog.LevelInfo, "zero",
 				slog.String("keep", "v"), slog.Attr{})
 		}},
 		{"empty group dropped and empty-keyed group inlined", func(l *slog.Logger) {
@@ -179,7 +178,7 @@ func TestRenderFaithfulDifferential(t *testing.T) {
 				replay := h.mk(&replayed)
 				records := rec.Records()
 				for i := range records {
-					if err := replay.Handle(context.Background(), records[i]); err != nil {
+					if err := replay.Handle(t.Context(), records[i]); err != nil {
 						t.Fatalf("replaying captured record %d: %v", i, err)
 					}
 				}
