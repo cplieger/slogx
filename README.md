@@ -130,19 +130,19 @@ attribute); values nested inside groups are out of scope, so walk `Records()`
 for those.
 
 `AttrValueExact(msg, key)` and `AttrValuesExact(msg, key)` scope the message by
-equality instead of substring — the same relation `CountExact` has to `Count`.
+equality instead of substring, the same relation `CountExact` has to `Count`.
 Reach for them when the message is pinned by an external contract: with
 substring scoping, `AttrValue("cycle complete", "files")` also answers from
 `"cycle completed with errors"`, so the assertion can inspect a record the
 contract never named. `AttrValuesExact` collects EVERY matching record's value
 in capture order (`nil` when none matched), which is the assertion a repeated
-log site needs — one record per retry, per pruned file, per polled item — and
+log site needs (one record per retry, per pruned file, per polled item) and
 the one both first-match and any-match helpers flatten. For these two, `msg` is
 a whole message, so `""` matches only an empty message rather than acting as a
 wildcard; `key` `""` still matches every attribute.
 
 `Attr(msgSub, key)` is the typed member of that family, returning the
-`slog.Value` itself. Use it when the KIND is the contract — `slog.Time("at", t)`
+`slog.Value` itself. Use it when the KIND is the contract: `slog.Time("at", t)`
 and `slog.String("at", t.String())` render identically, so no rendered
 comparison can tell a caller which one the code chose, while a JSON handler
 renders them very differently downstream. `AttrValue` is `Attr` rendered, so the
