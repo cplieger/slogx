@@ -215,18 +215,14 @@ var emitFormats = []struct {
 // integral and stable well below this, so a larger sample buys nothing but time.
 const emitRuns = 200
 
-// emitAllocSlack is the allowance each per-record comparison carries for the
-// test instrumentation's own allocations. It is 2 rather than 0 because the race
-// detector contributes up to one allocation per record and each side of a
-// comparison can round differently, so a difference of two independent
-// measurements can move by 2 with the code unchanged. It does not weaken the
-// gate: the regressions these contracts exist to catch are UNBOUNDED in the
-// axis under test — a per-attribute allocation is +194 over the span tested
-// below, and a With that re-preformats is +12 for ten attributes — so they clear
-// this allowance by more than an order of magnitude.
-const emitAllocSlack = 2
+// emitAllocSlack allows for race instrumentation and Go 1.27's pooled JSON
+// coder. Independent measurements can differ by three with unchanged code.
+// The regressions this test catches are unbounded: a per-attribute allocation
+// adds 194 over this span, and a With implementation that re-preformats adds
+// 12 for ten attributes.
+const emitAllocSlack = 3
 
-// emitAttrs builds n key-value argument pairs, the form the fleet's kv-only
+// emitAttrs builds n key-value argument pairs, the form the kv-only
 // sloglint setting requires at a call site. The slice is returned rather than
 // built in place so a caller can construct it outside a measured closure; a
 // closure that built its own arguments would report the fixture's allocations as
@@ -285,7 +281,7 @@ func TestEmitAllocationsAreBoundedRegardlessOfAttributeCount(t *testing.T) {
 				logger.Info("request handled", mix...)
 			})
 			if want := bare + emitAllocSlack; gotMix > want {
-				t.Errorf("Logger.Info through a %s handler with a realistic 5-attribute mix (string, int, duration, error, group) allocated %v times per run, want at most %v (an empty record costs %v, plus %v for instrumentation): a realistic log line must cost a small constant, not a per-attribute charge that multiplies by log volume",
+				t.Errorf("Logger.Info through a %s handler with a realistic 5-attribute mix (string, int, duration, error, group) allocated %v times per run, want at most %v (an empty record costs %v, plus %v for measurement variance): a realistic log line must cost a small constant, not a per-attribute charge that multiplies by log volume",
 					f.name, gotMix, want, bare, emitAllocSlack)
 			}
 
@@ -302,7 +298,7 @@ func TestEmitAllocationsAreBoundedRegardlessOfAttributeCount(t *testing.T) {
 					logger.Info("request handled", args...)
 				})
 				if want := bare + emitAllocSlack; measured[i] > want {
-					t.Errorf("Logger.Info through a %s handler with %d attributes allocated %v times per run, want at most %v (an empty record costs %v, plus %v for instrumentation): per-record allocation cost must not grow with the attribute count",
+					t.Errorf("Logger.Info through a %s handler with %d attributes allocated %v times per run, want at most %v (an empty record costs %v, plus %v for measurement variance): per-record allocation cost must not grow with the attribute count",
 						f.name, n, measured[i], want, bare, emitAllocSlack)
 				}
 			}
@@ -361,7 +357,7 @@ func TestEmitAllocationsDoNotScaleWithValueSize(t *testing.T) {
 			}
 			for i, got := range measured {
 				if want := measured[0] + emitAllocSlack; got > want {
-					t.Errorf("Logger.Info through a %s handler with one %d-byte value allocated %v times per run, want at most %v (its cost at %d bytes is %v, plus %v for instrumentation): emission cost must not track the SIZE of a value, or an app that is handed more upstream text pays more allocations per line for it",
+					t.Errorf("Logger.Info through a %s handler with one %d-byte value allocated %v times per run, want at most %v (its cost at %d bytes is %v, plus %v for measurement variance): emission cost must not track the SIZE of a value, or an app that is handed more upstream text pays more allocations per line for it",
 						f.name, sizes[i], got, want, sizes[0], measured[0], emitAllocSlack)
 				}
 			}
@@ -405,7 +401,7 @@ func TestWithPreformatsOncePerLoggerNotPerRecord(t *testing.T) {
 					derived.Info("request handled")
 				})
 				if want := bare + emitAllocSlack; widthCosts[i] > want {
-					t.Errorf("Logger.With(%d attributes) then Info through a %s handler allocated %v times per run, want at most %v (an undecorated logger costs %v, plus %v for instrumentation): a derived logger must render its inherited attributes once at With time, not on every record, or every base attribute an app attaches is charged to every line it logs",
+					t.Errorf("Logger.With(%d attributes) then Info through a %s handler allocated %v times per run, want at most %v (an undecorated logger costs %v, plus %v for measurement variance): a derived logger must render its inherited attributes once at With time, not on every record, or every base attribute an app attaches is charged to every line it logs",
 						n, f.name, widthCosts[i], want, bare, emitAllocSlack)
 				}
 			}
@@ -418,7 +414,7 @@ func TestWithPreformatsOncePerLoggerNotPerRecord(t *testing.T) {
 				nested.Info("request handled")
 			})
 			if want := bare + emitAllocSlack; gotNested > want {
-				t.Errorf("Logger.WithGroup then With then Info through a %s handler allocated %v times per run, want at most %v (an undecorated logger costs %v, plus %v for instrumentation): group nesting must be preformatted with the attributes it wraps",
+				t.Errorf("Logger.WithGroup then With then Info through a %s handler allocated %v times per run, want at most %v (an undecorated logger costs %v, plus %v for measurement variance): group nesting must be preformatted with the attributes it wraps",
 					f.name, gotNested, want, bare, emitAllocSlack)
 			}
 
