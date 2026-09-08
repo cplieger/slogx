@@ -1,8 +1,12 @@
 package capture
 
 import (
+	"bytes"
+	"io"
+	"log"
 	"log/slog"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -333,6 +337,72 @@ func TestDefaultCapturesGlobalAndRestores(t *testing.T) {
 	})
 	if slog.Default() != before {
 		t.Error("Default did not restore slog.Default() after the subtest ended")
+	}
+}
+
+func TestDefaultRestoresTheLogPackage(t *testing.T) {
+	// Not parallel: mutates the global slog default and the log package.
+	prevWriter, prevFlags := log.Writer(), log.Flags()
+	t.Cleanup(func() {
+		log.SetOutput(prevWriter)
+		log.SetFlags(prevFlags)
+	})
+
+	// Stand in for a caller that owns the log package's state, so the assertions
+	// below read what Default's cleanup left behind rather than the ambient
+	// process defaults.
+	var sink bytes.Buffer
+	log.SetOutput(&sink)
+	log.SetFlags(log.Ldate | log.Ltime)
+
+	t.Run("captures", func(t *testing.T) {
+		rec := Default(t)
+		slog.Info("through-default")
+		if !rec.Contains("through-default") {
+			t.Fatal("Default did not capture a slog.Default() log")
+		}
+	})
+
+	if got, want := log.Flags(), log.Ldate|log.Ltime; got != want {
+		t.Errorf("log.Flags() = %d, want %d (slog.SetDefault zeroes them, so the cleanup must put them back)", got, want)
+	}
+
+	// slog's own default handler writes through the log package, so a log
+	// writer left pointing at the recorder takes every later slog call in the
+	// process down with it.
+	sink.Reset()
+	slog.Warn("after-cleanup-slog")
+	log.Print("after-cleanup-log")
+	if got := sink.String(); !strings.Contains(got, "after-cleanup-slog") || !strings.Contains(got, "after-cleanup-log") {
+		t.Errorf("caller's log sink = %q, want both after-cleanup lines (the cleanup must point log's output back)", got)
+	}
+}
+
+func TestDefaultRestoreOrderSurvivesANonDefaultPrevious(t *testing.T) {
+	// Not parallel: mutates the global slog default and the log package.
+	prevLogger, prevWriter, prevFlags := slog.Default(), log.Writer(), log.Flags()
+	t.Cleanup(func() {
+		slog.SetDefault(prevLogger)
+		log.SetOutput(prevWriter)
+		log.SetFlags(prevFlags)
+	})
+
+	// A caller whose slog default is a real handler rather than slog's own: now
+	// reinstalling it re-runs the log redirect and re-zeroes the flags, so the
+	// cleanup only lands if it puts slog back BEFORE the log package.
+	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	log.SetFlags(log.Ldate)
+
+	t.Run("captures", func(t *testing.T) {
+		rec := Default(t)
+		slog.Info("through-default")
+		if !rec.Contains("through-default") {
+			t.Fatal("Default did not capture a slog.Default() log")
+		}
+	})
+
+	if got, want := log.Flags(), log.Ldate; got != want {
+		t.Errorf("log.Flags() = %d, want %d (reinstalling a non-default previous logger re-zeroes them, so the log restore must come second)", got, want)
 	}
 }
 
