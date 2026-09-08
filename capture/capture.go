@@ -21,6 +21,7 @@ package capture
 
 import (
 	"context"
+	"log"
 	"log/slog"
 	"slices"
 	"strings"
@@ -48,16 +49,26 @@ func New() (*slog.Logger, *Recorder) {
 	return slog.New(rec), rec
 }
 
-// Default installs a fresh Recorder as slog's default logger and restores the
-// previous default when the test ends (via tb.Cleanup). Use it for code that
-// logs through slog.Default(). Because it mutates global state, a test using it
-// must NOT call t.Parallel.
+// Default installs a fresh Recorder as slog's default logger and restores
+// every global slog.SetDefault mutates when the test ends (via tb.Cleanup):
+// slog's default logger, and the log package's output writer and flags. Use it
+// for code that logs through slog.Default(). Because it mutates global state, a
+// test using it must NOT call t.Parallel.
 func Default(tb testing.TB) *Recorder {
 	tb.Helper()
 	rec := &Recorder{}
-	prev := slog.Default()
+	// slog.SetDefault also points the log package at the installed handler
+	// (log.SetOutput plus log.SetFlags(0)), and skips that redirect when the
+	// logger carries slog's own default handler — which prev normally does, so
+	// reinstalling prev alone leaves log writing into this recorder. Restore
+	// slog first: restoring a non-default prev redirects log again.
+	prev, prevWriter, prevFlags := slog.Default(), log.Writer(), log.Flags()
 	slog.SetDefault(slog.New(rec))
-	tb.Cleanup(func() { slog.SetDefault(prev) })
+	tb.Cleanup(func() {
+		slog.SetDefault(prev)
+		log.SetOutput(prevWriter)
+		log.SetFlags(prevFlags)
+	})
 	return rec
 }
 
