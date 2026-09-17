@@ -2,9 +2,7 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/slogx.svg)](https://pkg.go.dev/github.com/cplieger/slogx)
 [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/slogx)](https://github.com/cplieger/slogx/blob/main/go.mod)
-[![Test coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/slogx/badges/coverage.json)](https://github.com/cplieger/slogx/actions/workflows/coverage.yml)
-[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13870/badge)](https://www.bestpractices.dev/projects/13870)
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/cplieger/slogx/badge)](https://scorecard.dev/viewer/?uri=github.com/cplieger/slogx)
+[![Mutation](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/slogx/badges/mutation.json)](https://github.com/cplieger/slogx/issues?q=label%3Agremlins-tracker)
 
 > Standard structured-logging setup for log/slog
 
