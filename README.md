@@ -1,8 +1,6 @@
 # slogx
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/slogx.svg)](https://pkg.go.dev/github.com/cplieger/slogx)
-[![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/slogx)](https://github.com/cplieger/slogx/blob/main/go.mod)
-[![Mutation](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/slogx/badges/mutation.json)](https://github.com/cplieger/slogx/issues?q=label%3Agremlins-tracker)
+[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/slogx.svg)](https://pkg.go.dev/github.com/cplieger/slogx) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/slogx)](https://github.com/cplieger/slogx/blob/main/go.mod) [![Mutation](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/slogx/badges/mutation.json)](https://github.com/cplieger/slogx/issues?q=label%3Agremlins-tracker)
 
 > Standard structured-logging setup for log/slog
 
