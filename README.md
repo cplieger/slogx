@@ -2,16 +2,20 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/slogx.svg)](https://pkg.go.dev/github.com/cplieger/slogx) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/slogx)](https://github.com/cplieger/slogx/blob/main/go.mod) [![Mutation](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/slogx/badges/mutation.json)](https://github.com/cplieger/slogx/issues?q=label%3Agremlins-tracker)
 
-> Standard structured-logging setup for log/slog
+slogx gives every Go service the same `log/slog` setup in one call, with text or JSON output, UTC timestamps, a level you can change at run time and `LOG_LEVEL` parsing.
 
-A tiny, standard-library-only helper that installs one standard slog handler
-shape: leveled text (logfmt) or JSON, UTC-normalized timestamps, and a
-`*slog.LevelVar` so the level can be set after config is read or flipped at
-runtime. Plus a `LOG_LEVEL` parser that adds the long-form `warning` alias slog
-lacks.
+It replaces the handler, level and timestamp code each Go service otherwise writes at startup, and it installs the standard library's own `TextHandler` or `JSONHandler`. Its `capture` subpackage records log output for tests. It uses only the standard library, needs Go 1.27 or later and is licensed under Apache-2.0.
 
-It is a thin wrapper around `log/slog`, not a logging framework and not a custom
-handler. Zero dependencies beyond the standard library.
+## Why use it
+
+slogx is built for Go services and containers that log through `log/slog` and want the same logger setup in every app.
+
+- `Setup` installs logfmt text or JSON, with each record's timestamp in UTC whatever the container's time zone.
+- It returns the `*slog.LevelVar` behind the level. You can install the logger before config is read and set the level later, or turn debug logging on and off at run time.
+- `ParseLevel` accepts `warning` as well as slog's own level names and offsets such as `warn+1`. It reports a bad value for your app to warn about.
+- `capture` passes the `testing/slogtest` handler checks and folds `Logger.With` attributes into each record. `capture.Default` restores the default logger and the `log` package's output after each test.
+
+Consider [tint](https://github.com/lmittmann/tint) if you want colorized logs in a terminal. It is a zero-dependency `slog.Handler` that writes tinted output and takes options in the shape of `slog.HandlerOptions`.
 
 ## Install
 
@@ -21,28 +25,24 @@ go get github.com/cplieger/slogx@latest
 
 ## Usage
 
-The common case: parse `LOG_LEVEL` and install the default logger. Parse first,
-install, then warn on a bad value (so the warning goes through the new handler):
+The common case parses `LOG_LEVEL` and installs the default logger. Parse first, install, then warn about a bad value, so the warning goes through the new handler:
 
 ```go
 lvl, ok := slogx.ParseLevel(os.Getenv("LOG_LEVEL"), slog.LevelInfo)
 slogx.Setup(slogx.Options{Level: lvl})
 if !ok {
-	// Field-name-only: a misconfigured env expansion could place a secret here.
+	// Log the variable's name, never its value, which a bad env expansion could fill with a secret.
 	slog.Warn("invalid LOG_LEVEL, using default", "var", "LOG_LEVEL", "default", "info")
 }
 ```
 
-An app whose structured log events are the product (shipped to Loki, rendered as
-dashboard columns) emits JSON to stdout:
+An app that ships its log events to a log store such as Loki can write JSON to stdout:
 
 ```go
 slogx.Setup(slogx.Options{Format: slogx.JSON, Output: os.Stdout})
 ```
 
-Install a handler _before_ config is read (so early warnings still emit), then
-set the level once it is known. The returned `*slog.LevelVar` also flips the
-level at runtime for a debug toggle:
+Install a handler before config is read, so warnings from loading config still print, then set the level once it is known. The returned `*slog.LevelVar` also changes the level at run time for a debug toggle:
 
 ```go
 lv := slogx.Setup(slogx.Options{}) // Info default, on stderr
@@ -61,29 +61,30 @@ func setDebug(on bool) {
 }
 ```
 
-Building your own handler options? `UTCTime` is exported as the escape hatch:
+When you build your own handler options, add `UTCTime` to get UTC timestamps:
 
 ```go
 h := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{ReplaceAttr: slogx.UTCTime})
 ```
 
+The examples for `ParseLevel`, `ParseFormat` and `capture.New` on pkg.go.dev run as tests.
+
 ## API
 
-- `Setup(Options) *slog.LevelVar`: build a handler and install it as `slog`'s default; returns the LevelVar backing its level.
-- `NewHandler(Options) (slog.Handler, *slog.LevelVar)`: the same without the `SetDefault`, for composition.
-- `Options{Output, Format, Level, AddSource}`: zero value is a text handler at Info on stderr.
-- `Format`: `Text` (logfmt, default) or `JSON`; any other value is a programmer error and makes `NewHandler`/`Setup` panic (`ParseFormat` only ever produces the two constants).
-- `ParseLevel(raw string, def slog.Level) (slog.Level, bool)`: parse a level string (case-insensitive, `warning` alias, slog offset syntax; the alias composes with offsets, so `warning+1` parses like `warn+1`); `ok=false` on a non-empty unparseable value.
-- `ParseFormat(raw string, def Format) (Format, bool)`: parse a format string (`text`/`json`, case-insensitive, trimmed); same contract as `ParseLevel`: empty returns the default with `ok=true`, a non-empty unrecognized value returns the default with `ok=false` so the caller can warn.
-- `UTCTime(groups []string, a slog.Attr) slog.Attr`: the ReplaceAttr that renders timestamps in UTC.
-- `capture` (subpackage `slogx/capture`): a record-capturing `slog.Handler` for tests; see [Testing](#testing).
+- `Setup(Options) *slog.LevelVar` builds a handler, installs it as slog's default and returns its `LevelVar`. Each call replaces the default logger. It also routes the `log` package's output through the new handler. `NewHandler(Options) (slog.Handler, *slog.LevelVar)` does the same without installing it.
+- `Options{Output, Format, Level, AddSource}` has a usable zero value, text at Info. One `Output` takes every level, and a nil `Output` means stderr for both formats.
+- `Format` is `Text`, the logfmt default, or `JSON`. Any other value makes `NewHandler` and `Setup` panic, and `ParseFormat` returns only those two.
+- `ParseLevel(raw, def)` and `ParseFormat(raw, def)` trim the input and ignore case. An empty string returns `(def, true)` and an unrecognized value `(def, false)`. `ParseLevel` maps `warning` to `warn`, so `warning+1` parses like `warn+1`.
+- `UTCTime(groups, attr)` is the `ReplaceAttr` that renders a record's time in UTC. A `time` attribute inside a group keeps its own time zone.
+- The `capture` types are covered below.
 
-## Testing
+The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/slogx). Releases follow semantic versioning.
 
-The `slogx/capture` subpackage records log output so a test can assert on it
-without hand-rolling a buffer handler. For code that logs through
-`slog.Default()`, `capture.Default(t)` swaps in a recorder and restores the
-previous default on cleanup:
+## Testing with capture
+
+The `slogx/capture` subpackage records log output so a test can assert on it without a hand-written buffer handler. Import it only from `_test.go` files. It is a separate package, so its `testing` import never reaches a production build.
+
+For code that logs through `slog.Default()`, `capture.Default(t)` installs a recorder. When the test ends, it restores the previous default logger and the `log` package's output and flags. A test that uses it must not call `t.Parallel`.
 
 ```go
 func TestWarnsWhenFull(t *testing.T) {
@@ -97,9 +98,7 @@ func TestWarnsWhenFull(t *testing.T) {
 }
 ```
 
-For code that takes an injected `*slog.Logger`, `capture.New()` returns a logger
-plus its recorder and never touches the global default, so the test stays
-parallel-safe:
+For code that takes an injected `*slog.Logger`, `capture.New()` returns a logger and its recorder and leaves the global default alone, so the test can run in parallel:
 
 ```go
 logger, rec := capture.New()
@@ -107,84 +106,34 @@ c := NewComponent(WithLogger(logger))
 // ... exercise c, then assert on rec.Contains / Count / CountExact / Messages / Records
 ```
 
-`Count` matches by substring; `CountExact` matches the whole message. Reach for
-`CountExact` when a message is pinned by an external contract (a log-based
-alert rule matching the exact `msg`), where a substring count would false-pass
-on a superstring message. `CountLevel(level, sub)` scopes the substring count
-to records at exactly one level, for escalation contracts ("one ERROR and zero
-WARN of this message") that the level-blind counters cannot express.
+The recorder has message checks such as `Count`, `CountExact` and `CountLevel`, attribute checks such as `AttrValue` and `HasAttr`, and `Records()` for anything else. Each stored record matches what the standard `TextHandler` or `JSONHandler` would write, including attributes added with `Logger.With` and groups added with `Logger.WithGroup`. [Testing log output with capture](docs/capture.md) explains which check to use and how messages and values match.
 
-Attribute-level assertions cover a record's top-level attributes, with
-`Logger.With` derivations already folded in: `AttrValue(msgSub, key)` returns
-the first match's rendered value, `HasAttr(msgSub, key, rendered)` pins an
-exact rendered value, and `AttrContains(msgSub, key, sub)` matches the value
-by substring. Values compare by their rendered form (`slog.Value.String()`),
-so an `Int64` 7 and a string `"7"` both satisfy `"7"`; the comparison is
-kind-agnostic on purpose. The empty string is a wildcard for both scoping
-parameters (`msgSub` `""` matches every record, `key` `""` matches every
-attribute); values nested inside groups are out of scope, so walk `Records()`
-for those.
+## Unsupported by design
 
-`AttrValueExact(msg, key)` and `AttrValuesExact(msg, key)` scope the message by
-equality instead of substring, the same relation `CountExact` has to `Count`.
-Reach for them when the message is pinned by an external contract: with
-substring scoping, `AttrValue("cycle complete", "files")` also answers from
-`"cycle completed with errors"`, so the assertion can inspect a record the
-contract never named. `AttrValuesExact` collects EVERY matching record's value
-in capture order (`nil` when none matched), which is the assertion a repeated
-log site needs (one record per retry, per pruned file, per polled item) and
-the one both first-match and any-match helpers flatten. For these two, `msg` is
-a whole message, so `""` matches only an empty message rather than acting as a
-wildcard; `key` `""` still matches every attribute.
-
-`Attr(msgSub, key)` is the typed member of that family, returning the
-`slog.Value` itself. Use it when the KIND is the contract: `slog.Time("at", t)`
-and `slog.String("at", t.String())` render identically, so no rendered
-comparison can tell a caller which one the code chose, while a JSON handler
-renders them very differently downstream. `AttrValue` is `Attr` rendered, so the
-two can never disagree about what a record carries. A group value is detached
-from the recorder's storage before it is returned, recursively, so holding the
-result across later captures is safe. Prefer `AttrValue` when only the text
-matters, and a `Records()` walk when a whole record's shape is the contract (its
-level, its complete key set, several values at once).
-
-`capture` is a separate package so its `testing` import and record buffer never
-reach production consumers of `slogx`; import it only from `_test.go` files.
-Captured records are render-faithful: `Logger.With`/`Logger.WithGroup` nesting
-is folded into each stored record, attribute values are stored resolved
-(`slog.LogValuer`), and degenerate attrs follow the standard `slog.Handler`
-output rules, so `rec.Records()` matches what a real handler would emit.
-
-## Unsupported by Design
-
-These are deliberate non-goals, not a TODO list. The library covers one
-cohesive concept, installing the standard slog handler, and stays small on
-purpose.
+These are deliberate non-goals. The library does one job, installing the standard slog handler, and stays small on purpose.
 
 | Feature | Rationale |
 | --- | --- |
-| A custom `slog.Handler` implementation | `slogx` composes the standard-library `Text`/`JSON` handlers. If you need different formatting, write your own handler and use `UTCTime` in its options. |
-| Secret redaction / attribute scrubbing | Keeping secrets out of logs is per-call-site discipline (log `token_set=true`, not the token). A blanket redacting ReplaceAttr gives false confidence; the library will not add one. |
-| Audit-event schemas | A structured audit log (actor, action, outcome) is domain policy that belongs in the app, not in a generic logging helper. |
-| `LOG_LEVEL` (or any) env-var _names_ | `ParseLevel` takes a string; the app owns which environment variable it comes from and its default. |
-| Per-app attribute conventions | Base attributes (`slog.With("service", …)`), key naming, and message wording are the app's editorial choices. Call `.With` on the logger `Setup` installs. |
-| A logging facade / leveled wrapper types | `slog` is the interface. `slogx` configures it and gets out of the way; it does not wrap `slog.Logger` in another type. |
+| A custom `slog.Handler` implementation | `slogx` composes the standard `Text` and `JSON` handlers. For different formatting, write your own handler and put `UTCTime` in its options. |
+| Secret redaction or attribute scrubbing | Each call site keeps secrets out. Log `token_set=true` instead of the token. A blanket redacting ReplaceAttr gives false confidence. |
+| Audit-event schemas | An audit log with actor, action and outcome is domain policy for the app. |
+| `LOG_LEVEL` or any other env-var name | `ParseLevel` takes a string. The app owns which environment variable it reads and its default. |
+| Per-app attribute conventions | Base attributes such as `slog.With("service", ...)`, key names and message wording are the app's choice. Call `.With` on the logger `Setup` installs. |
+| A logging facade or leveled wrapper types | `slog` is the interface. `slogx` configures it and leaves `slog.Logger` unwrapped. |
+
+## Documentation
+
+- [Testing log output with capture](docs/capture.md) is for a developer writing assertions on log output.
 
 ## Contributing
 
-Issues and PRs are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the
-conventions and how to run the checks locally.
+Issues and PRs are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the conventions and how to run the checks locally.
 
 ## Disclaimer
 
-This project is built with care and follows security best practices, but it is
-intended for personal / self-hosted use. No guarantees of fitness for production
-environments. Use at your own risk.
+This project is built with care and follows security best practices, but it is intended for personal / self-hosted use. No guarantees of fitness for production environments. Use at your own risk.
 
-This project was built with AI-assisted tooling using
-[Claude](https://claude.com), [GPT](https://openai.com), and
-[Kiro](https://kiro.dev). The human maintainer defines architecture,
-supervises implementation, and makes all final decisions.
+This project was built with AI-assisted tooling using [Claude](https://claude.com), [GPT](https://openai.com), and [Kiro](https://kiro.dev). The human maintainer defines architecture, supervises implementation, and makes all final decisions.
 
 ## License
 
