@@ -1,8 +1,7 @@
-// Package slogx is a standard structured-logging setup, extracted from
-// the Go apps that all installed the same log/slog handler by hand.
+// Package slogx is a standard structured-logging setup for log/slog.
 //
-// It is a thin, cohesive helper around log/slog — not a logging framework and
-// not a replacement handler:
+// It is a thin helper around log/slog, not a logging framework and not a
+// replacement handler:
 //
 //   - Setup installs slog's default logger the standard way: a leveled text
 //     (logfmt) or JSON handler with UTC-normalized timestamps, returning the
@@ -18,7 +17,7 @@
 // The capture subpackage is the matching test-support recorder: a slog.Handler
 // that records emitted log records so tests can assert on them.
 //
-// It deliberately does not own log-level environment-variable names, secret
-// redaction, audit-event schemas, or per-app attribute conventions — those stay
-// in the consuming app. It carries no dependencies beyond the standard library.
+// It does not own log-level environment-variable names, secret redaction,
+// audit-event schemas or per-app attribute conventions, which stay in the
+// consuming app. It carries no dependencies beyond the standard library.
 package slogx
