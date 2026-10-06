@@ -338,22 +338,13 @@ func TestEmitAllocationsAreBoundedRegardlessOfAttributeCount(t *testing.T) {
 }
 
 // TestEmitAllocationsDoNotScaleWithValueSize pins the axis an application does
-// not fully control. A call site chooses its attribute KEYS, but the values
-// often carry upstream text — an error message from a remote API, a response
-// body excerpt, a filename from a share — whose length is somebody else's
-// choice. If emission cost tracked value length, an app could be made to
-// allocate more per line by being sent more bytes, inside the logging setup
-// every app in the fleet shares.
-//
-// The sizes stop at 8 KiB on purpose. slog renders a record into a pooled buffer
-// and only returns it to the pool while its capacity stays under 16 KiB, so a
-// record whose rendered form exceeds that is re-grown from scratch every time
-// and costs a few more allocations (measured on go1.27.0: 4 through text and 5
-// through JSON at 32 KiB, against 1 and 2 below the cap). That step is the
-// standard library's buffer-pool policy, not this library's cost model, and it
-// is bounded and logarithmic rather than proportional — 512 KiB measures the
-// same as 32 KiB. Asserting across it would compare two regimes instead of two
-// sizes.
+// not fully control: attribute values often carry upstream text whose length is
+// somebody else's choice, so emission cost must not track value length. The
+// sizes stop at 8 KiB on purpose: slog returns a rendered record's pooled buffer
+// only under 16 KiB capacity, so a larger record re-grows each time and costs a
+// few more allocations (go1.27.0: 4 text and 5 JSON at 32 KiB, against 1 and 2).
+// That step is the standard library's bounded pool policy, not this library's
+// cost model, so asserting across it would compare two regimes.
 func TestEmitAllocationsDoNotScaleWithValueSize(t *testing.T) {
 	sizes := []int{8, 64, 512, 4096, 8192}
 	for _, f := range emitFormats {
@@ -383,19 +374,14 @@ func TestEmitAllocationsDoNotScaleWithValueSize(t *testing.T) {
 	}
 }
 
-// TestWithPreformatsOncePerLoggerNotPerRecord pins the property that is the
-// whole point of Logger.With, and the one a chart cannot see. A derived logger
-// renders its inherited attributes ONCE, when With is called, and copies the
-// prepared bytes into every later record; if that preformatting were redone per
-// record, a logger carrying a dozen base attributes (a service name, a version,
-// a request id — exactly what the fleet's apps attach) would pay for all of them
-// on every line. Nothing about that regression changes the shape of an existing
-// benchmark, and it gets more expensive the more attributes an app attaches,
-// which is the opposite of how a cost regression is usually noticed.
-//
-// The assertion is that a derived logger's per-record cost equals a bare
-// logger's, within the instrumentation allowance, at every preformat width from
-// one attribute to two hundred.
+// TestWithPreformatsOncePerLoggerNotPerRecord pins the whole point of
+// Logger.With, which a benchmark chart cannot see: a derived logger renders its
+// inherited attributes ONCE, when With is called, and copies the prepared bytes
+// into every later record. Redone per record, a logger carrying a dozen base
+// attributes (a service name, a version, a request id) would pay for all of them
+// on every line. The assertion is that a derived logger's per-record cost equals
+// a bare logger's, within the instrumentation allowance, at every preformat width
+// from one attribute to two hundred.
 func TestWithPreformatsOncePerLoggerNotPerRecord(t *testing.T) {
 	widths := []int{1, 5, 10, 50, 200}
 	for _, f := range emitFormats {
