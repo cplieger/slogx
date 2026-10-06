@@ -1,9 +1,9 @@
 // Package capture provides a slog.Handler that records log records for
 // assertion in tests, plus helpers to install it as the default logger.
 //
-// It is a separate package from slogx on purpose: the testing import and the
-// record buffer are test-support machinery that should never reach slogx's
-// production consumers. Import it only from _test.go files.
+// It is a separate package from slogx so that the testing import and the record
+// buffer never reach slogx's production consumers. Import it only from _test.go
+// files.
 //
 // Attributes and groups added through Logger.With / Logger.WithGroup are
 // captured with the same nesting a real handler would emit: derived handles
@@ -14,7 +14,7 @@
 // Captured records are render-faithful: they hold what a stdlib TextHandler
 // or JSONHandler would emit, not the verbatim call-site input. At ingestion
 // the recorder applies the attribute output rules of the slog.Handler
-// contract — values are resolved (slog.LogValuer), a zero Attr is dropped, a
+// contract. Values are resolved (slog.LogValuer), a zero Attr is dropped, a
 // group with no attrs is dropped, and an empty-keyed group has its attrs
 // inlined into its parent.
 package capture
