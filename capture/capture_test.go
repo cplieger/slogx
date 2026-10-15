@@ -406,6 +406,51 @@ func TestDefaultRestoreOrderSurvivesANonDefaultPrevious(t *testing.T) {
 	}
 }
 
+func TestSwapDefaultRestoresPrevious(t *testing.T) {
+	// Not parallel: mutates the global slog default and the log package.
+	prevWriter, prevFlags := log.Writer(), log.Flags()
+	t.Cleanup(func() {
+		log.SetOutput(prevWriter)
+		log.SetFlags(prevFlags)
+	})
+
+	// Pin a log baseline slog.SetDefault never writes, so the flags assertion
+	// fails without the restore even when an earlier test left them at 0.
+	var sink bytes.Buffer
+	log.SetOutput(&sink)
+	log.SetFlags(log.Ldate | log.Ltime)
+
+	before, beforeWriter, beforeFlags := slog.Default(), log.Writer(), log.Flags()
+	outer, _ := New()
+	inner, _ := New()
+
+	t.Run("outer", func(t *testing.T) {
+		SwapDefault(t, outer)
+		if slog.Default() != outer {
+			t.Fatal("SwapDefault did not make the given logger the default")
+		}
+		t.Run("inner", func(t *testing.T) {
+			SwapDefault(t, inner)
+			if slog.Default() != inner {
+				t.Error("nested SwapDefault did not make the given logger the default")
+			}
+		})
+		if slog.Default() != outer {
+			t.Error("after the nested swap's cleanup, the default is not the outer logger")
+		}
+	})
+
+	if slog.Default() != before {
+		t.Error("after both cleanups, the default is not the logger from before the swaps")
+	}
+	if log.Writer() != beforeWriter {
+		t.Error("after both cleanups, log.Writer() is not the writer from before the swaps")
+	}
+	if log.Flags() != beforeFlags {
+		t.Errorf("after both cleanups, log.Flags() = %d, want %d", log.Flags(), beforeFlags)
+	}
+}
+
 func TestConcurrentHandleIsRaceFree(t *testing.T) {
 	t.Parallel()
 	logger, rec := New()
