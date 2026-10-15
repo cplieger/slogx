@@ -107,9 +107,9 @@ func TestNewHandlerInvalidFormatPanics(t *testing.T) {
 // restoreLoggingDefaults registers a Cleanup putting back every global
 // slog.SetDefault mutates: slog's default logger, and the log package's output
 // writer and flags, which SetDefault redirects through the installed handler and
-// does not put back when the previous default is reinstalled — capture.Default
-// carries the same restore and the mechanism behind it. Restore slog first:
-// restoring a non-default logger redirects log again.
+// does not put back when the previous default is reinstalled (capture.SwapDefault
+// documents why). Restore slog first: restoring a non-default logger redirects
+// log again.
 func restoreLoggingDefaults(tb testing.TB) {
 	tb.Helper()
 	logger, writer, flags := slog.Default(), log.Writer(), log.Flags()

@@ -84,7 +84,7 @@ The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/slo
 
 The `slogx/capture` subpackage records log output so a test can assert on it without a hand-written buffer handler. Import it only from `_test.go` files. It is a separate package, so its `testing` import never reaches a production build.
 
-For code that logs through `slog.Default()`, `capture.Default(t)` installs a recorder. When the test ends, it restores the previous default logger and the `log` package's output and flags. A test that uses it must not call `t.Parallel`.
+For code that logs through `slog.Default()`, `capture.Default(t)` installs a recorder. When the test ends, it restores the previous default logger and the `log` package's output and flags. `capture.SwapDefault(t, logger)` does the same for a logger you build yourself, such as one writing to a buffer. A test that uses either must not call `t.Parallel`.
 
 ```go
 func TestWarnsWhenFull(t *testing.T) {

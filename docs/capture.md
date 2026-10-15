@@ -4,7 +4,7 @@ This page explains the checks in the `slogx/capture` subpackage and how each one
 
 ## Install a recorder
 
-Use `capture.Default(t)` for code that logs through `slog.Default()`. It installs a fresh recorder as the default logger. When the test ends, `t.Cleanup` restores the previous default logger and the `log` package's output writer and flags, because `slog.SetDefault` changes all three. A test that uses it must not call `t.Parallel`.
+Use `capture.Default(t)` for code that logs through `slog.Default()`. It installs a fresh recorder as the default logger. When the test ends, `t.Cleanup` restores the previous default logger and the `log` package's output writer and flags, because `slog.SetDefault` changes all three. A test that uses it must not call `t.Parallel`. `capture.SwapDefault(t, logger)` installs a logger you build yourself with the same restore, under the same rule.
 
 Use `capture.New()` for code that takes an injected `*slog.Logger`. It returns a logger and its recorder and leaves the global default alone, so the test can run in parallel.
 
