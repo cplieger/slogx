@@ -1,5 +1,6 @@
 // Package capture provides a slog.Handler that records log records for
-// assertion in tests, plus helpers to install it as the default logger.
+// assertion in tests, plus helpers to install it, or any logger, as the
+// default logger for one test.
 //
 // It is a separate package from slogx so that the testing import and the record
 // buffer never reach slogx's production consumers. Import it only from _test.go
@@ -49,27 +50,36 @@ func New() (*slog.Logger, *Recorder) {
 	return slog.New(rec), rec
 }
 
-// Default installs a fresh Recorder as slog's default logger and restores
-// every global slog.SetDefault mutates when the test ends (via tb.Cleanup):
-// slog's default logger, and the log package's output writer and flags. Use it
-// for code that logs through slog.Default(). Because it mutates global state, a
-// test using it must NOT call t.Parallel.
+// Default installs a fresh Recorder as slog's default logger until the test
+// ends, restoring what SwapDefault restores. Use it for code that logs through
+// slog.Default(). Because it mutates global state, a test using it must NOT
+// call t.Parallel.
 func Default(tb testing.TB) *Recorder {
 	tb.Helper()
 	rec := &Recorder{}
+	SwapDefault(tb, slog.New(rec))
+	return rec
+}
+
+// SwapDefault makes l slog's default logger until the test ends, then restores
+// (via tb.Cleanup) every global slog.SetDefault mutates: slog's default logger,
+// and the log package's output writer and flags. Swaps nested in subtests
+// restore in reverse order. l must not be nil (slog.SetDefault panics on it).
+// Because it mutates global state, a test using it must NOT call t.Parallel.
+func SwapDefault(tb testing.TB, l *slog.Logger) {
+	tb.Helper()
 	// slog.SetDefault also points the log package at the installed handler
 	// (log.SetOutput plus log.SetFlags(0)), and skips that redirect when the
 	// logger carries slog's own default handler — which prev normally does, so
-	// reinstalling prev alone leaves log writing into this recorder. Restore
-	// slog first: restoring a non-default prev redirects log again.
+	// reinstalling prev alone leaves log writing into l. Restore slog first:
+	// restoring a non-default prev redirects log again.
 	prev, prevWriter, prevFlags := slog.Default(), log.Writer(), log.Flags()
-	slog.SetDefault(slog.New(rec))
+	slog.SetDefault(l)
 	tb.Cleanup(func() {
 		slog.SetDefault(prev)
 		log.SetOutput(prevWriter)
 		log.SetFlags(prevFlags)
 	})
-	return rec
 }
 
 // Enabled reports true for every level so nothing is filtered before capture.
