@@ -1,5 +1,8 @@
 # slogx
 
+> Moved to [`github.com/cplieger/go/slogx`](https://github.com/cplieger/go/tree/dev/slogx).
+> **Archived 2026-11-07. This repository is read-only. The published Go module stays available.**
+
 [![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/slogx.svg)](https://pkg.go.dev/github.com/cplieger/slogx) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/slogx)](https://github.com/cplieger/slogx/blob/main/go.mod) [![Mutation](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/slogx/badges/mutation.json)](https://github.com/cplieger/slogx/issues?q=label%3Agremlins-tracker)
 
 slogx gives every Go service the same `log/slog` setup in one call, with text or JSON output, UTC timestamps, a level you can change at run time and `LOG_LEVEL` parsing.
